@@ -283,12 +283,13 @@ object Guard {
 /** Message notifications with reply, mark-read and copy-code. */
 object Notify {
     const val KEY_REPLY = "reply"
-    private const val CH = "messages"
+    private const val CH = "messages_chime"   // plays the Sahl chime
 
     private fun channel(c: Context) {
         val w = Sahl.wrap(c)
-        c.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-            NotificationChannel(CH, w.getString(R.string.messages_channel), NotificationManager.IMPORTANCE_HIGH))
+        val nm = c.getSystemService(NotificationManager::class.java) ?: return
+        nm.createNotificationChannel(Sahl.chimeChannel(c, CH, w.getString(R.string.messages_channel)))
+        try { nm.deleteNotificationChannel("messages") } catch (e: Exception) { }
     }
 
     fun message(c: Context, address: String, body: String, threadId: Long = -1L, groupName: String? = null) {
