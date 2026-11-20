@@ -76,8 +76,55 @@ object Sms {
     fun myNumbers(c: Context): Set<String> =
         (Sahl.prefs(c).getString("my_numbers", "") ?: "").split(',', ' ', '\n').map { Norm.phoneKey(it) }.filter { it.length >= 7 }.toSet()
 
-    /** Latest message of every thread (SMS). */
-    fun conversations(c: Context, scan: Int = 5000): List<Conversation> {
+    /**
+     * Fast path: Android keeps one row per conversation (thread) with its snippet and date,
+     * so we read those directly instead of scanning every message.
+     */
+    fun conversations(c: Context): List<Conversation> = try { fastConversations(c) } catch (e: Exception) { slowConversations(c) }
+
+    private fun fastConversations(c: Context): List<Conversation> {
+        val cr = c.contentResolver
+        // recipient id -> phone number
+        val canon = HashMap<Long, String>()
+        cr.query(Uri.parse("content://mms-sms/canonical-addresses"), null, null, null, null)?.use {
+            val i = it.getColumnIndex("_id"); val a = it.getColumnIndex("address")
+            while (it.moveToNext()) canon[it.getLong(i)] = it.getString(a) ?: ""
+        }
+        // unread counts (only unread rows are read, so this is quick)
+        val unread = HashMap<Long, Int>()
+        cr.query(Telephony.Sms.CONTENT_URI, arrayOf(Telephony.Sms.THREAD_ID), "${Telephony.Sms.READ}=0 AND ${Telephony.Sms.TYPE}=1", null, null)?.use {
+            while (it.moveToNext()) { val t = it.getLong(0); unread[t] = (unread[t] ?: 0) + 1 }
+        }
+        try {
+            cr.query(Telephony.Mms.CONTENT_URI, arrayOf("thread_id"), "read=0 AND msg_box=1", null, null)?.use {
+                while (it.moveToNext()) { val t = it.getLong(0); unread[t] = (unread[t] ?: 0) + 1 }
+            }
+        } catch (e: Exception) { }
+        val mine = myNumbers(c)
+        val photo = Sahl.wrap(c).getString(R.string.photo)
+        val out = ArrayList<Conversation>()
+        cr.query(Uri.parse("content://mms-sms/conversations?simple=true"),
+            arrayOf("_id", "date", "recipient_ids", "snippet", "has_attachment"), null, null, "date DESC")?.use {
+            while (it.moveToNext()) {
+                val t = it.getLong(0)
+                val members = (it.getString(2) ?: "").split(' ').mapNotNull { id -> id.toLongOrNull()?.let { canon[it] } }
+                    .filter { a -> a.isNotBlank() && Norm.phoneKey(a) !in mine }
+                if (members.isEmpty()) continue
+                val snippet = (it.getString(3) ?: "").ifBlank { if (it.getInt(4) == 1) photo else "" }
+                val addr = if (members.size > 1) members.joinToString(",") else members[0]
+                val (name, ph) = if (members.size > 1) groupName(c, members) to null else Names.of(c, members[0])
+                out.add(Conversation(t, addr, snippet, it.getLong(1), unread[t] ?: 0, false, name, ph,
+                    category = if (members.size > 1) Category.PERSONAL else Category.of(members[0], snippet, name != null),
+                    pinned = Prefs.pinned(c, t), muted = Prefs.muted(c, t),
+                    members = if (members.size > 1) members else emptyList(), photoMsg = snippet == photo))
+            }
+        }
+        if (out.isEmpty()) throw IllegalStateException("empty")   // fall back to the full scan
+        return out.sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.date })
+    }
+
+    /** Slower fallback: scan recent messages (used only if the fast path isn't available). */
+    private fun slowConversations(c: Context, scan: Int = 5000): List<Conversation> {
         val latest = LinkedHashMap<Long, Conversation>()
         val unread = HashMap<Long, Int>()
         c.contentResolver.query(Telephony.Sms.CONTENT_URI,

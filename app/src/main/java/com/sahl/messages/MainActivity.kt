@@ -147,13 +147,33 @@ class MainActivity : SahlActivity() {
         chip(getString(R.string.cat_offers) + count(Category.OFFERS), cat == Category.OFFERS) { cat = Category.OFFERS; unreadOnly = false; renderChips(); filter() }
     }
 
+    /** The last list is saved, so the app shows it instantly next time while it refreshes. */
+    private fun saveCache(l: List<Conversation>) {
+        val a = org.json.JSONArray()
+        for (c in l.take(60)) a.put(org.json.JSONObject().put("t", c.threadId).put("a", c.address).put("s", c.snippet).put("d", c.date)
+            .put("u", c.unread).put("n", c.name ?: "").put("p", c.photo ?: "").put("c", c.category).put("pin", c.pinned).put("m", c.muted)
+            .put("g", org.json.JSONArray(c.members)))
+        Sahl.prefs(this).edit().putString("list_cache", a.toString()).apply()
+    }
+
+    private fun readCache(): List<Conversation> = try {
+        val a = org.json.JSONArray(Sahl.prefs(this).getString("list_cache", "[]"))
+        (0 until a.length()).map { a.getJSONObject(it) }.map { o ->
+            val g = o.optJSONArray("g"); val members = if (g == null) emptyList() else (0 until g.length()).map { g.getString(it) }
+            Conversation(o.getLong("t"), o.getString("a"), o.getString("s"), o.getLong("d"), o.getInt("u"), false,
+                o.getString("n").ifEmpty { null }, o.getString("p").ifEmpty { null }, o.getInt("c"), o.getBoolean("pin"), o.getBoolean("m"), members)
+        }
+    } catch (e: Exception) { emptyList() }
+
     private fun load() {
+        if (all.isEmpty()) { val cached = readCache(); if (cached.isNotEmpty()) { all = cached; renderChips(); filter() } }
         Thread {
             Names.clear()
             val c = try { Sms.conversations(this) } catch (e: Exception) { emptyList() }
+            runOnUiThread { all = c; renderChips(); filter() }
+            saveCache(c)
             Cleanup.run(this)
             Scheduled.sendDue(this)
-            runOnUiThread { all = c; renderChips(); filter() }
         }.start()
     }
 
