@@ -77,4 +77,19 @@
     <string name="set_undo">التراجع عن الإرسال (تأخير 3 ثوانٍ)</string>
     <string name="set_delivery">علامات التسليم ✓✓</string>
     <string name="set_clean">حذف الرموز الأقدم من 24 ساعة</string>
+    <string name="restricted_title">اسمح لسهل للرسائل أولًا</string>
+    <string name="open_app_info">فتح معلومات التطبيق</string>
+    <string name="restricted_steps">يمنع أندرويد الوصول للرسائل للتطبيقات المثبتة من ملف. للسماح:\n\n1. اضغط «فتح معلومات التطبيق».\n2. اضغط قائمة ⋮ (أعلى اليمين).\n3. اختر «السماح بالإعدادات المقيدة» وأكّد بالرمز أو البصمة.\n4. ارجع واضغط «تعيين كافتراضي» مرة أخرى.\n\nتحتاج لذلك مرة واحدة فقط.</string>
+    <string name="add_calendar">إضافة للتقويم</string>
+    <string name="track_x">تتبّع (%1$s)</string>
+    <string name="warn_guard">⚠ حارس المكالمات: %1$s</string>
+    <string name="warn_scam">⚠ قد تكون احتيالًا: مرسل مجهول مع رابط. لا تضغط ولا تشارك الرموز.</string>
+    <string name="warn_foreign_link">⚠ مرسل دولي مع رابط — انتبه.</string>
+    <string name="backup">النسخ الاحتياطي</string>
+    <string name="backup_hint">احفظ الملف في مجلد يزامنه سهل للمزامنة مع OneDrive.</string>
+    <string name="backup_export">نسخ احتياطي لكل الرسائل</string>
+    <string name="backup_import">استعادة من نسخة</string>
+    <string name="backup_done">تم حفظ %1$d رسالة</string>
+    <string name="restore_done">تمت استعادة %1$d رسالة</string>
+    <string name="backup_failed">فشل النسخ</string>
 </resources>

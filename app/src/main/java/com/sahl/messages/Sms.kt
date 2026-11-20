@@ -307,7 +307,9 @@ object Notify {
         val read = Notification.Action.Builder(null, w.getString(R.string.mark_read),
             PendingIntent.getBroadcast(c, id + 1, Intent(c, ActionReceiver::class.java).setAction("read").putExtra("thread", thread),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
+        val warn = if (groupName == null) Assist.warning(c, address, body, Names.of(c, address).first != null) else null
         val b = Notification.Builder(c, CH).setSmallIcon(R.drawable.ic_chat).setStyle(style)
+            .apply { if (warn != null) setSubText("⚠ " + warn) }
             .setContentIntent(open).setAutoCancel(true).setCategory(Notification.CATEGORY_MESSAGE)
             .addAction(reply).addAction(read)
         Sms.otp(body)?.let { code ->

@@ -37,6 +37,14 @@ class SettingsActivity : SahlActivity() {
         sw(R.string.set_delivery, "delivery", true)
         sw(R.string.set_clean, "clean_codes", false)
 
+        val bk = card(R.string.backup)
+        bk.addView(text(getString(R.string.backup_hint), 12f, col(R.color.sub)))
+        bk.addView(Button(this).apply { text = getString(R.string.backup_export); typeface = font
+            setOnClickListener { try { startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("application/json").putExtra(Intent.EXTRA_TITLE, "SahlMessages-" + java.time.LocalDate.now() + ".json"), 60) } catch (e: Exception) { } } })
+        bk.addView(Button(this).apply { text = getString(R.string.backup_import); typeface = font
+            setOnClickListener { try { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), 61) } catch (e: Exception) { } } })
+
         val up = card(R.string.check_updates)
         up.addView(text(getString(R.string.version, BuildConfig.VERSION_NAME), 14f, col(R.color.sub)))
         up.addView(Button(this).apply {
@@ -46,6 +54,24 @@ class SettingsActivity : SahlActivity() {
 
         val un = card(R.string.union)
         un.addView(text(getString(R.string.union_desc), 14f, col(R.color.sub)))
+    }
+
+    @Deprecated("Activity result")
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        super.onActivityResult(req, res, data)
+        val uri = data?.data ?: return
+        if (res != RESULT_OK) return
+        if (req == 61 && !Sms.isDefault(this)) { toast(R.string.make_default); return }
+        Thread {
+            val n = try {
+                if (req == 60) contentResolver.openOutputStream(uri)?.use { Backup.export(this, it) } ?: 0
+                else contentResolver.openInputStream(uri)?.use { Backup.import(this, it) } ?: 0
+            } catch (e: Exception) { -1 }
+            runOnUiThread {
+                Toast.makeText(this, if (n < 0) getString(R.string.backup_failed)
+                    else getString(if (req == 60) R.string.backup_done else R.string.restore_done, n), Toast.LENGTH_LONG).show()
+            }
+        }.start()
     }
 
     private fun card(title: Int): LinearLayout {

@@ -98,7 +98,17 @@ class MainActivity : SahlActivity() {
 
     @Deprecated("Activity result")
     override fun onActivityResult(req: Int, res: Int, data: Intent?) {
-        super.onActivityResult(req, res, data); renderBanner(); if (!granted()) askPermissions()
+        super.onActivityResult(req, res, data); renderBanner()
+        // Android blocks SMS for apps installed from a file until "restricted settings" are allowed
+        if (req == 5 && !Sms.isDefault(this)) restrictedHelp() else if (!granted()) askPermissions()
+    }
+
+    private fun restrictedHelp() {
+        AlertDialog.Builder(this).setTitle(R.string.restricted_title).setMessage(R.string.restricted_steps)
+            .setPositiveButton(R.string.open_app_info) { _, _ ->
+                try { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName"))) } catch (e: Exception) { }
+            }
+            .setNegativeButton(R.string.cancel, null).show()
     }
 
     private fun renderBanner() {

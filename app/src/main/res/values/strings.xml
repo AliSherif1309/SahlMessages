@@ -77,4 +77,19 @@
     <string name="set_undo">Undo send (3-second delay)</string>
     <string name="set_delivery">Delivered ticks ✓✓</string>
     <string name="set_clean">Delete codes older than 24 hours</string>
+    <string name="restricted_title">Allow Sahl Messages first</string>
+    <string name="open_app_info">Open App info</string>
+    <string name="restricted_steps">Android blocks SMS access for apps installed from a downloaded file. To allow it:\n\n1. Tap “Open App info”.\n2. Tap the ⋮ menu (top right).\n3. Tap “Allow restricted settings” and confirm with your PIN/fingerprint.\n4. Come back and tap “Set as default” again.\n\nYou only need to do this once.</string>
+    <string name="add_calendar">Add to calendar</string>
+    <string name="track_x">Track (%1$s)</string>
+    <string name="warn_guard">⚠ Call Guard: %1$s</string>
+    <string name="warn_scam">⚠ Looks like a scam: unknown sender with a link. Don’t click it or share codes.</string>
+    <string name="warn_foreign_link">⚠ International sender with a link — be careful.</string>
+    <string name="backup">Backup</string>
+    <string name="backup_hint">Save the file in a folder Sahl Sync syncs to OneDrive.</string>
+    <string name="backup_export">Back up all messages</string>
+    <string name="backup_import">Restore from a backup</string>
+    <string name="backup_done">Backed up %1$d messages</string>
+    <string name="restore_done">Restored %1$d messages</string>
+    <string name="backup_failed">Backup failed</string>
 </resources>

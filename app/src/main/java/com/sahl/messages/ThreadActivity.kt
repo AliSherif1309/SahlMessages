@@ -37,6 +37,8 @@ class ThreadActivity : SahlActivity() {
     private lateinit var undoBar: LinearLayout
     private lateinit var schedBox: LinearLayout
     private var pendingSend: Runnable? = null
+    private lateinit var suggestBox: LinearLayout
+    private lateinit var warnBox: TextView
     private var sims: List<Sim> = emptyList()
     private var subId = -1
 
@@ -62,6 +64,10 @@ class ThreadActivity : SahlActivity() {
         else root.addView(text(listOfNotNull(getString(R.string.not_in_contacts), Countries.of(address, Sahl.countryCode(this), rtl)).joinToString("  ·  "),
             12f, col(R.color.sub)).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, px(4)) })
 
+        warnBox = text("", 13f, 0xFFFFFFFF.toInt()).apply {
+            background = round(0xFFB3261E.toInt(), 14f); setPadding(px(14), px(10), px(14), px(10)); visibility = View.GONE
+        }
+        root.addView(warnBox, LinearLayout.LayoutParams(-1, -2).apply { setMargins(px(12), px(4), px(12), px(4)) })
         list = ListView(this).apply {
             divider = null; selector = android.graphics.drawable.ColorDrawable(0); isStackFromBottom = true
             transcriptMode = ListView.TRANSCRIPT_MODE_NORMAL; clipToPadding = false; setPadding(0, px(8), 0, px(8))
@@ -81,6 +87,9 @@ class ThreadActivity : SahlActivity() {
             }.press(14f))
         }
         root.addView(undoBar, LinearLayout.LayoutParams(-1, -2).apply { setMargins(px(12), px(4), px(12), 0) })
+        // Quick reply suggestions
+        suggestBox = LinearLayout(this).apply { setPaddingRelative(px(12), px(4), px(12), 0) }
+        root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(suggestBox) })
         // Attached photo preview
         attachBox = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE; setPadding(px(16), px(6), px(16), 0) }
         root.addView(attachBox)
@@ -153,7 +162,20 @@ class ThreadActivity : SahlActivity() {
             val mms = try { Mms.inThread(this, thread) } catch (e: Exception) { emptyList() }
             val all: List<Any> = (sms + mms).sortedBy { if (it is Msg) it.date else (it as MmsMsg).date }
             Sms.markRead(this, thread); Notify.clear(this, thread)
-            runOnUiThread { msgs = all; list.adapter = Bubbles(); renderScheduled() }
+            val lastIn = sms.lastOrNull { !it.outgoing }
+            val known = group || Names.of(this, address).first != null
+            val warn = if (lastIn != null && !group) Assist.warning(this, address, lastIn.body, known) else null
+            val lastIsIncoming = all.lastOrNull().let { it is Msg && !it.outgoing }
+            val sugg = if (lastIsIncoming) Assist.suggestions(this, lastIn?.body) else emptyList()
+            runOnUiThread {
+                msgs = all; list.adapter = Bubbles(); renderScheduled()
+                warnBox.text = warn ?: ""; warnBox.visibility = if (warn != null) View.VISIBLE else View.GONE
+                suggestBox.removeAllViews()
+                if (input.text.isEmpty()) for (q in sugg) suggestBox.addView(text(q, 13f, col(R.color.emerald), true).apply {
+                    background = round(col(R.color.tonal), 16f); setPadding(px(14), px(7), px(14), px(7))
+                    setOnClickListener { input.setText(q); input.setSelection(q.length); suggestBox.removeAllViews() }
+                }.press(16f), LinearLayout.LayoutParams(-2, -2).apply { marginEnd = px(6) })
+            }
         }.start()
     }
 
@@ -376,12 +398,29 @@ class ThreadActivity : SahlActivity() {
                 if (mine) marginStart = px(56) else marginEnd = px(56)
             })
             outer.addView(holder, LinearLayout.LayoutParams(-1, -2))
-            // Code detected: one-tap copy right under the message
-            if (!mine) Sms.otp(m.body)?.let { code ->
-                outer.addView(text(getString(R.string.copy_code, code), 13f, col(R.color.emerald), true).apply {
-                    background = round(col(R.color.tonal), 14f); setPadding(px(12), px(6), px(12), px(6))
-                    setOnClickListener { copy(code) }
-                }.press(14f), LinearLayout.LayoutParams(-2, -2).apply { topMargin = px(4) })
+            // Smart actions right under the message: copy code, add to calendar, track parcel
+            if (!mine) {
+                val acts = LinearLayout(this@ThreadActivity)
+                fun chip(icon: Int, label: String, go: () -> Unit) = acts.addView(LinearLayout(this@ThreadActivity).apply {
+                    gravity = Gravity.CENTER_VERTICAL; background = round(col(R.color.tonal), 14f); setPadding(px(10), px(6), px(12), px(6))
+                    addView(icon(icon, col(R.color.emerald), 16))
+                    addView(text(label, 13f, col(R.color.emerald), true).apply { setPaddingRelative(px(6), 0, 0, 0) })
+                    setOnClickListener { go() }
+                }.press(14f), LinearLayout.LayoutParams(-2, -2).apply { marginEnd = px(6) })
+                Sms.otp(m.body)?.let { code -> chip(R.drawable.ic_copy, getString(R.string.copy_code, code)) { copy(code) } }
+                Assist.when_(m.body, m.date)?.let { at ->
+                    chip(R.drawable.ic_bell, getString(R.string.add_calendar)) {
+                        val title = (Names.of(this@ThreadActivity, address).first ?: address) + " — " + m.body.lineSequence().first().take(40)
+                        try { startActivity(Assist.calendarIntent(title, m.body, at)) } catch (e: Exception) { }
+                    }
+                }
+                Assist.tracking(m.body)?.let { tr ->
+                    chip(R.drawable.ic_send, getString(R.string.track_x, tr.carrier)) {
+                        try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(tr.url))) } catch (e: Exception) { }
+                    }
+                }
+                if (acts.childCount > 0) outer.addView(HorizontalScrollView(this@ThreadActivity).apply {
+                    isHorizontalScrollBarEnabled = false; addView(acts) }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = px(4) })
             }
             return outer
         }
