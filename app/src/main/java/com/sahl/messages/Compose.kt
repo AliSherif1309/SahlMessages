@@ -66,7 +66,7 @@ class ComposeActivity : SahlActivity() {
         if (dq.length >= 3 && l.none { Norm.phoneKey(it.number) == Norm.phoneKey(q) }) l.add(0, P(getString(R.string.send_to, q.trim()), q.trim(), "", dq, null))
         list.adapter = object : BaseAdapter() {
             override fun getCount() = l.size
-            override fun getItem(i: Int) = l[i]
+            override fun getItem(i: Int): Any = l[i]
             override fun getItemId(i: Int) = i.toLong()
             override fun getView(i: Int, cv: View?, parent: ViewGroup): View {
                 val p = l[i]

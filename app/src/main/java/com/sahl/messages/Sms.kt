@@ -121,12 +121,13 @@ object Sms {
 
     fun defaultSub() = SmsManager.getDefaultSmsSubscriptionId()
 
+    @Suppress("DEPRECATION")
     private fun manager(c: Context, subId: Int): SmsManager {
-        @Suppress("DEPRECATION")
-        return if (Build.VERSION.SDK_INT >= 31) {
+        if (Build.VERSION.SDK_INT >= 31) {
             val m = c.getSystemService(SmsManager::class.java)
-            if (subId >= 0) m.createForSubscriptionId(subId) else m
-        } else if (subId >= 0) SmsManager.getSmsManagerForSubscriptionId(subId) else SmsManager.getDefault()
+            return if (subId >= 0) m.createForSubscriptionId(subId) else m
+        }
+        return if (subId >= 0) SmsManager.getSmsManagerForSubscriptionId(subId) else SmsManager.getDefault()
     }
 
     /** Sends a text and records it in the Sent box (the default SMS app must do this itself). */
