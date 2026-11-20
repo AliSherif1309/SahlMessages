@@ -54,7 +54,7 @@ class ThreadActivity : SahlActivity() {
             12f, col(R.color.sub)).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, px(4)) })
 
         list = ListView(this).apply {
-            divider = null; selector = android.graphics.drawable.ColorDrawable(0); stackFromBottom = true
+            divider = null; selector = android.graphics.drawable.ColorDrawable(0); isStackFromBottom = true
             transcriptMode = ListView.TRANSCRIPT_MODE_NORMAL; clipToPadding = false; setPadding(0, px(8), 0, px(8))
         }
         root.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -162,7 +162,7 @@ class ThreadActivity : SahlActivity() {
     }
 
     private fun msgActions(m: Msg) {
-        val items = mutableListOf(
+        val items = mutableListOf<Triple<Int, String, () -> Unit>>(
             Triple(R.drawable.ic_copy, getString(R.string.copy)) { copy(m.body) },
             Triple(R.drawable.ic_share, getString(R.string.share)) {
                 try { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, m.body), getString(R.string.share))) } catch (e: Exception) { }

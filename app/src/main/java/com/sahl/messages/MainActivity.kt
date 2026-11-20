@@ -168,7 +168,7 @@ class MainActivity : SahlActivity() {
     }
 
     private fun actions(cv: Conversation) {
-        val items = mutableListOf(
+        val items = mutableListOf<Triple<Int, String, () -> Unit>>(
             Triple(R.drawable.ic_check, getString(R.string.mark_read)) { Thread { Sms.markRead(this, cv.threadId) }.start() },
             Triple(R.drawable.ic_call, getString(R.string.call)) { Sahl.callVia(this, cv.address) },
             Triple(R.drawable.ic_delete, getString(R.string.delete_chat)) {
