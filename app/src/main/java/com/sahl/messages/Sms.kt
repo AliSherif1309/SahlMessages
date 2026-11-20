@@ -66,7 +66,15 @@ object Names {
 
 @SuppressLint("MissingPermission")
 object Sms {
-    fun isDefault(c: Context) = Telephony.Sms.getDefaultSmsPackage(c) == c.packageName
+    /** Uses the role check first — on some phones (Honor) the old check returns the wrong app. */
+    fun isDefault(c: Context): Boolean {
+        try { if (c.getSystemService(android.app.role.RoleManager::class.java)?.isRoleHeld(android.app.role.RoleManager.ROLE_SMS) == true) return true } catch (e: Exception) { }
+        return try { Telephony.Sms.getDefaultSmsPackage(c) == c.packageName } catch (e: Exception) { false }
+    }
+
+    /** Your own number(s), so group chats don't list you. Set in Settings. */
+    fun myNumbers(c: Context): Set<String> =
+        (Sahl.prefs(c).getString("my_numbers", "") ?: "").split(',', ' ', '\n').map { Norm.phoneKey(it) }.filter { it.length >= 7 }.toSet()
 
     /** Latest message of every thread (SMS). */
     fun conversations(c: Context, scan: Int = 5000): List<Conversation> {
@@ -91,7 +99,8 @@ object Sms {
         val photo = c.getString(R.string.photo)
         for ((t, m) in mms) {
             val cur = latest[t]
-            val members = m.addresses
+            val mine = myNumbers(c)
+            val members = m.addresses.filter { Norm.phoneKey(it) !in mine }
             val mmsAddr = m.from ?: members.firstOrNull() ?: ""
             if (cur == null || m.date > cur.date)
                 latest[t] = Conversation(t, if (members.size > 1) members.joinToString(",") else (cur?.address ?: mmsAddr),

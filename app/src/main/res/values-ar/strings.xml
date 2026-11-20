@@ -92,4 +92,6 @@
     <string name="backup_done">تم حفظ %1$d رسالة</string>
     <string name="restore_done">تمت استعادة %1$d رسالة</string>
     <string name="backup_failed">فشل النسخ</string>
+    <string name="my_numbers">أرقامي</string>
+    <string name="my_numbers_hint">أرقامك (الشريحتين) مفصولة بفاصلة — حتى لا تظهر في المجموعات.</string>
 </resources>

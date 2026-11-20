@@ -199,7 +199,8 @@ object Mms {
     fun store(c: Context, bytes: ByteArray, sub: Int) {
         val h = Pdu.headers(bytes)
         val from = h.from ?: ""
-        val others = h.to.filter { Norm.phoneKey(it) != Norm.phoneKey(myNumber(c)) }
+        val mine = Sms.myNumbers(c) + Norm.phoneKey(myNumber(c))
+        val others = h.to.filter { Norm.phoneKey(it) !in mine }
         val members = (listOf(from) + others).filter { it.isNotBlank() }.distinctBy { Norm.phoneKey(it) }
         val thread = try { Telephony.Threads.getOrCreateThreadId(c, members.toSet()) } catch (e: Exception) { 0L }
         val cv = ContentValues().apply {
@@ -334,7 +335,8 @@ object Mms {
                 while (it.moveToNext() && out.size < limit) {
                     val id = it.getLong(0)
                     val (t, imgs) = text(c, id)
-                    val (from, all) = addresses(c, id)
+                    val (from, all0) = addresses(c, id)
+                    val mine = Sms.myNumbers(c); val all = all0.filter { Norm.phoneKey(it) !in mine }
                     out.add(MmsMsg(id, thread, it.getLong(1) * 1000, it.getInt(2), it.getInt(3) == 1, t, imgs, from, all))
                 }
             }

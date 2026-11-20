@@ -92,4 +92,6 @@
     <string name="backup_done">Backed up %1$d messages</string>
     <string name="restore_done">Restored %1$d messages</string>
     <string name="backup_failed">Backup failed</string>
+    <string name="my_numbers">My numbers</string>
+    <string name="my_numbers_hint">Your own phone numbers (both SIMs), separated by commas — so group chats don’t list you.</string>
 </resources>

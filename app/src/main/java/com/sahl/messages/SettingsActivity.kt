@@ -27,6 +27,18 @@ class SettingsActivity : SahlActivity() {
         dcard.addView(text(getString(if (Sms.isDefault(this)) R.string.is_default else R.string.make_default), 14f,
             if (Sms.isDefault(this)) col(R.color.emerald) else col(R.color.sub)))
 
+        val me = card(R.string.my_numbers)
+        me.addView(text(getString(R.string.my_numbers_hint), 12f, col(R.color.sub)))
+        me.addView(EditText(this).apply {
+            setText(p.getString("my_numbers", "")); inputType = android.text.InputType.TYPE_CLASS_PHONE
+            textSize = 16f; typeface = font; setTextColor(col(R.color.text)); hint = "55xxxxxx, 33xxxxxx"
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) { p.edit().putString("my_numbers", s?.toString() ?: "").apply() }
+            })
+        })
+
         val sm = card(R.string.smart_title)
         fun sw(label: Int, key: String, def: Boolean) = sm.addView(Switch(this).apply {
             text = getString(label); typeface = font; setTextColor(col(R.color.text)); textSize = 15f
