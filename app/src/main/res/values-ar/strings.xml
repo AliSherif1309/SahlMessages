@@ -55,4 +55,26 @@
     <string name="version">الإصدار %1$s</string>
     <string name="union">تطبيقات سهل</string>
     <string name="union_desc">الأسماء من سهل لجهات الاتصال، والمكالمات عبر سهل للهاتف، وحارس المكالمات يُسكت المرسلين المحظورين.</string>
+    <string name="photo">📷 صورة</string>
+    <string name="group_of">مجموعة · %1$d أشخاص</string>
+    <string name="sending_soon">سيتم الإرسال خلال 3 ثوانٍ…</string>
+    <string name="undo">تراجع</string>
+    <string name="later_text_only">اكتب نصًا أولًا (الإرسال لاحقًا للمحادثات الفردية)</string>
+    <string name="pick_future">اختر وقتًا في المستقبل</string>
+    <string name="scheduled_ok">تمت الجدولة ✓</string>
+    <string name="scheduled_for">تُرسل %1$s</string>
+    <string name="photo_attached">صورة مرفقة</string>
+    <string name="pin">تثبيت في الأعلى</string>
+    <string name="unpin">إلغاء التثبيت</string>
+    <string name="mute">كتم الإشعارات</string>
+    <string name="unmute">إلغاء الكتم</string>
+    <string name="cat_personal">شخصية</string>
+    <string name="cat_codes">الرموز</string>
+    <string name="cat_banks">البنوك</string>
+    <string name="cat_offers">العروض</string>
+    <string name="mms_failed">تعذّر تنزيل رسالة صورة</string>
+    <string name="smart_title">ميزات ذكية</string>
+    <string name="set_undo">التراجع عن الإرسال (تأخير 3 ثوانٍ)</string>
+    <string name="set_delivery">علامات التسليم ✓✓</string>
+    <string name="set_clean">حذف الرموز الأقدم من 24 ساعة</string>
 </resources>

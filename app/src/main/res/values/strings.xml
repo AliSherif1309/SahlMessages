@@ -55,4 +55,26 @@
     <string name="version">Version %1$s</string>
     <string name="union">Sahl apps</string>
     <string name="union_desc">Names come from Sahl Contacts, calls go through Sahl Phone, and Call Guard keeps blocked senders quiet.</string>
+    <string name="photo">📷 Photo</string>
+    <string name="group_of">Group · %1$d people</string>
+    <string name="sending_soon">Sending in 3 seconds…</string>
+    <string name="undo">Undo</string>
+    <string name="later_text_only">Type a text first (send later works for 1-to-1 texts)</string>
+    <string name="pick_future">Pick a time in the future</string>
+    <string name="scheduled_ok">Scheduled ✓</string>
+    <string name="scheduled_for">Sends %1$s</string>
+    <string name="photo_attached">Photo attached</string>
+    <string name="pin">Pin to top</string>
+    <string name="unpin">Unpin</string>
+    <string name="mute">Mute notifications</string>
+    <string name="unmute">Unmute</string>
+    <string name="cat_personal">Personal</string>
+    <string name="cat_codes">Codes</string>
+    <string name="cat_banks">Banks</string>
+    <string name="cat_offers">Offers</string>
+    <string name="mms_failed">Couldn’t download a picture message</string>
+    <string name="smart_title">Smart features</string>
+    <string name="set_undo">Undo send (3-second delay)</string>
+    <string name="set_delivery">Delivered ticks ✓✓</string>
+    <string name="set_clean">Delete codes older than 24 hours</string>
 </resources>

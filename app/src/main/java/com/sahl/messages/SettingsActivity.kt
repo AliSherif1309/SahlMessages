@@ -27,6 +27,16 @@ class SettingsActivity : SahlActivity() {
         dcard.addView(text(getString(if (Sms.isDefault(this)) R.string.is_default else R.string.make_default), 14f,
             if (Sms.isDefault(this)) col(R.color.emerald) else col(R.color.sub)))
 
+        val sm = card(R.string.smart_title)
+        fun sw(label: Int, key: String, def: Boolean) = sm.addView(Switch(this).apply {
+            text = getString(label); typeface = font; setTextColor(col(R.color.text)); textSize = 15f
+            isChecked = p.getBoolean(key, def); setPadding(0, px(6), 0, px(6))
+            setOnCheckedChangeListener { _, on -> p.edit().putBoolean(key, on).apply() }
+        })
+        sw(R.string.set_undo, "undo_send", true)
+        sw(R.string.set_delivery, "delivery", true)
+        sw(R.string.set_clean, "clean_codes", false)
+
         val up = card(R.string.check_updates)
         up.addView(text(getString(R.string.version, BuildConfig.VERSION_NAME), 14f, col(R.color.sub)))
         up.addView(Button(this).apply {

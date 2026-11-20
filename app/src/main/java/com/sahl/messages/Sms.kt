@@ -25,9 +25,14 @@ import android.widget.Toast
 import java.util.concurrent.ConcurrentHashMap
 
 data class Conversation(val threadId: Long, val address: String, val snippet: String, val date: Long,
-                        val unread: Int, val outgoing: Boolean, val name: String?, val photo: String?)
+                        val unread: Int, val outgoing: Boolean, val name: String?, val photo: String?,
+                        val category: Int = Category.PERSONAL, val pinned: Boolean = false, val muted: Boolean = false,
+                        val members: List<String> = emptyList(), val photoMsg: Boolean = false) {
+    val group get() = members.size > 1
+}
 
-data class Msg(val id: Long, val body: String, val date: Long, val type: Int, val read: Boolean, val subId: Int) {
+data class Msg(val id: Long, val body: String, val date: Long, val type: Int, val read: Boolean, val subId: Int, val status: Int = -1) {
+    val delivered get() = status == Telephony.Sms.STATUS_COMPLETE
     val outgoing get() = type != Telephony.Sms.MESSAGE_TYPE_INBOX
     val failed get() = type == Telephony.Sms.MESSAGE_TYPE_FAILED
     val pending get() = type == Telephony.Sms.MESSAGE_TYPE_OUTBOX || type == Telephony.Sms.MESSAGE_TYPE_QUEUED
@@ -81,19 +86,37 @@ object Sms {
                 }
             }
         }
-        return latest.values.map { cv ->
-            val (name, photo) = Names.of(c, cv.address)
-            cv.copy(unread = unread[cv.threadId] ?: 0, name = name, photo = photo)
+        // Pictures and group messages
+        val mms = try { Mms.latest(c) } catch (e: Exception) { emptyMap() }
+        val photo = c.getString(R.string.photo)
+        for ((t, m) in mms) {
+            val cur = latest[t]
+            val members = m.addresses
+            val mmsAddr = m.from ?: members.firstOrNull() ?: ""
+            if (cur == null || m.date > cur.date)
+                latest[t] = Conversation(t, if (members.size > 1) members.joinToString(",") else (cur?.address ?: mmsAddr),
+                    m.text.ifBlank { photo }, m.date, 0, m.outgoing, null, null, members = members, photoMsg = m.images.isNotEmpty())
+            else latest[t] = cur.copy(members = if (members.size > 1) members else cur.members)
+            unread[t] = (unread[t] ?: 0) + (Mms.unreadCache[t] ?: 0)
         }
+        return latest.values.map { cv ->
+            val (name, ph) = if (cv.group) groupName(c, cv.members) to null else Names.of(c, cv.address)
+            cv.copy(unread = unread[cv.threadId] ?: 0, name = name, photo = ph,
+                category = if (cv.group) Category.PERSONAL else Category.of(cv.address, cv.snippet, name != null),
+                pinned = Prefs.pinned(c, cv.threadId), muted = Prefs.muted(c, cv.threadId))
+        }.sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.date })
     }
+
+    fun groupName(c: Context, members: List<String>) =
+        members.take(4).joinToString(", ") { (Names.of(c, it).first ?: it).substringBefore(' ') } + if (members.size > 4) " +${members.size - 4}" else ""
 
     fun messages(c: Context, threadId: Long, limit: Int = 500): List<Msg> {
         val out = ArrayList<Msg>()
         c.contentResolver.query(Telephony.Sms.CONTENT_URI,
-            arrayOf(Telephony.Sms._ID, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE, Telephony.Sms.READ, Telephony.Sms.SUBSCRIPTION_ID),
+            arrayOf(Telephony.Sms._ID, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE, Telephony.Sms.READ, Telephony.Sms.SUBSCRIPTION_ID, Telephony.Sms.STATUS),
             "${Telephony.Sms.THREAD_ID}=?", arrayOf(threadId.toString()), Telephony.Sms.DATE + " DESC")?.use {
             while (it.moveToNext() && out.size < limit)
-                out.add(Msg(it.getLong(0), it.getString(1) ?: "", it.getLong(2), it.getInt(3), it.getInt(4) == 1, it.getInt(5)))
+                out.add(Msg(it.getLong(0), it.getString(1) ?: "", it.getLong(2), it.getInt(3), it.getInt(4) == 1, it.getInt(5), it.getInt(6)))
         }
         return out.reversed()
     }
@@ -106,13 +129,16 @@ object Sms {
             c.contentResolver.update(Telephony.Sms.CONTENT_URI, ContentValues().apply { put(Telephony.Sms.READ, 1); put(Telephony.Sms.SEEN, 1) },
                 "${Telephony.Sms.THREAD_ID}=? AND ${Telephony.Sms.READ}=0", arrayOf(threadId.toString()))
         } catch (e: Exception) { }
+        Mms.markRead(c, threadId)
         c.getSystemService(NotificationManager::class.java)?.cancel(threadId.toInt())
     }
 
     fun deleteMessage(c: Context, id: Long) = try { c.contentResolver.delete(Uri.withAppendedPath(Telephony.Sms.CONTENT_URI, id.toString()), null, null) } catch (e: Exception) { 0 }
     fun deleteThread(c: Context, threadId: Long) = try {
-        c.contentResolver.delete(Telephony.Sms.CONTENT_URI, "${Telephony.Sms.THREAD_ID}=?", arrayOf(threadId.toString()))
-    } catch (e: Exception) { 0 }
+        c.contentResolver.delete(Uri.parse("content://mms-sms/conversations/$threadId"), null, null)
+    } catch (e: Exception) {
+        try { c.contentResolver.delete(Telephony.Sms.CONTENT_URI, "${Telephony.Sms.THREAD_ID}=?", arrayOf(threadId.toString())) } catch (x: Exception) { 0 }
+    }
 
     fun sims(c: Context): List<Sim> = try {
         c.getSystemService(SubscriptionManager::class.java)?.activeSubscriptionInfoList
@@ -151,7 +177,13 @@ object Sms {
             for (i in parts.indices) sent.add(PendingIntent.getBroadcast(c, (System.nanoTime() % 100000).toInt() + i,
                 Intent(c, SentReceiver::class.java).setData(uri ?: Uri.EMPTY).putExtra("last", i == parts.size - 1),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
-            m.sendMultipartTextMessage(address, null, parts, sent, null)
+            val delivered = if (Prefs.deliveryReports(c) && uri != null) ArrayList(parts.indices.map { i ->
+                PendingIntent.getBroadcast(c, (System.nanoTime() % 100000).toInt() + 500 + i, Intent(c, DeliveredReceiver::class.java).setData(uri),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT) }) else null
+            if (uri != null && delivered != null) try {
+                c.contentResolver.update(uri, ContentValues().apply { put(Telephony.Sms.STATUS, Telephony.Sms.STATUS_PENDING) }, null, null)
+            } catch (e: Exception) { }
+            m.sendMultipartTextMessage(address, null, parts, sent, delivered)
             true
         } catch (e: Exception) {
             uri?.let { u -> c.contentResolver.update(u, ContentValues().apply { put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_FAILED) }, null, null) }
@@ -200,16 +232,19 @@ class SmsDeliverReceiver : BroadcastReceiver() {
                     put(Telephony.Sms.READ, 0); put(Telephony.Sms.SEEN, 0)
                     if (sub >= 0) put(Telephony.Sms.SUBSCRIPTION_ID, sub)
                 })
-                if (!Guard.blocked(c, address)) Notify.message(c, address, body)
+                if (!Guard.blocked(c, address) && !Prefs.muted(c, Sms.threadFor(c, address))) Notify.message(c, address, body)
             } catch (e: Exception) { } finally { pending.finish() }
         }.start()
     }
 }
 
-/** MMS arrives here; full picture/group messages come in a later version. */
+/** MMS arrives here as a short notice; Sahl Messages then downloads the full picture/group message. */
 class MmsDeliverReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, intent: Intent) {
-        Notify.simple(c, Sahl.wrap(c).getString(R.string.mms_received), Sahl.wrap(c).getString(R.string.mms_later))
+        val pdu = intent.getByteArrayExtra("data") ?: return
+        val sub = intent.getIntExtra("subscription", -1)
+        val pending = goAsync()
+        Thread { try { Mms.onPush(c, pdu, sub) } catch (e: Exception) { } finally { pending.finish() } }.start()
     }
 }
 
@@ -247,15 +282,15 @@ object Notify {
             NotificationChannel(CH, w.getString(R.string.messages_channel), NotificationManager.IMPORTANCE_HIGH))
     }
 
-    fun message(c: Context, address: String, body: String) {
+    fun message(c: Context, address: String, body: String, threadId: Long = -1L, groupName: String? = null) {
         channel(c)
         val w = Sahl.wrap(c)
-        val thread = Sms.threadFor(c, address)
+        val thread = if (threadId > 0) threadId else Sms.threadFor(c, address)
         val id = thread.toInt()
         val name = Names.of(c, address).first ?: address
         val open = PendingIntent.getActivity(c, id, Intent(c, ThreadActivity::class.java).putExtra("thread", thread).putExtra("address", address)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val sender = NPerson.Builder().setName(name).build()
+        val sender = NPerson.Builder().setName(groupName ?: name).build()
         val me = NPerson.Builder().setName(w.getString(R.string.me)).build()
         // Keep the last few lines of this conversation in the notification
         val prev = Sahl.prefs(c).getString("n_$id", "") ?: ""

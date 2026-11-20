@@ -85,6 +85,12 @@
             </intent-filter>
         </service>
         <receiver android:name=".SentReceiver" android:exported="false" />
+        <receiver android:name=".DeliveredReceiver" android:exported="false" />
+        <receiver android:name=".ScheduledReceiver" android:exported="false" />
+        <receiver android:name=".MmsDownloadedReceiver" android:exported="false" />
+        <receiver android:name=".MmsSentReceiver" android:exported="false" />
+        <provider android:name=".MmsFileProvider" android:authorities="com.sahl.messages.mmsfiles"
+            android:exported="false" android:grantUriPermissions="true" />
         <receiver android:name=".ActionReceiver" android:exported="false" />
     </application>
 </manifest>

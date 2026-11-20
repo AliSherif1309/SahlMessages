@@ -26,6 +26,7 @@ class MainActivity : SahlActivity() {
     private var all: List<Conversation> = emptyList()
     private var query = ""
     private var unreadOnly = false
+    private var cat = -1                       // -1 = all categories
     private lateinit var list: ListView
     private lateinit var banner: LinearLayout
     private lateinit var empty: LinearLayout
@@ -54,7 +55,7 @@ class MainActivity : SahlActivity() {
         val (search, _) = searchBox(getString(R.string.search)) { query = it; filter() }
         root.addView(search, LinearLayout.LayoutParams(-1, -2).apply { setMargins(px(16), px(2), px(16), px(6)) })
         chips = LinearLayout(this).apply { setPaddingRelative(px(16), px(2), px(16), px(6)) }
-        root.addView(chips)
+        root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
         val body = FrameLayout(this)
         list = ListView(this).apply {
             divider = null; selector = android.graphics.drawable.ColorDrawable(0); clipToPadding = false; setPadding(0, 0, 0, px(96))
@@ -122,20 +123,27 @@ class MainActivity : SahlActivity() {
 
     private fun renderChips() {
         chips.removeAllViews()
-        fun chip(label: Int, on: Boolean, go: () -> Unit) = chips.addView(text(getString(label), 13f,
+        fun chip(label: String, on: Boolean, go: () -> Unit) = chips.addView(text(label, 13f,
             if (on) 0xFFFFFFFF.toInt() else col(R.color.text), on).apply {
             background = round(if (on) col(R.color.emerald) else col(R.color.tonal), 18f)
             setPadding(px(16), px(8), px(16), px(8)); setOnClickListener { go() }
         }.press(18f), LinearLayout.LayoutParams(-2, -2).apply { marginEnd = px(8) })
-        chip(R.string.all, !unreadOnly) { unreadOnly = false; renderChips(); filter() }
-        chip(R.string.unread, unreadOnly) { unreadOnly = true; renderChips(); filter() }
+        fun count(k: Int) = all.count { it.category == k && it.unread > 0 }.let { if (it > 0) " $it" else "" }
+        chip(getString(R.string.all), !unreadOnly && cat == -1) { unreadOnly = false; cat = -1; renderChips(); filter() }
+        chip(getString(R.string.unread), unreadOnly) { unreadOnly = true; cat = -1; renderChips(); filter() }
+        chip(getString(R.string.cat_personal) + count(Category.PERSONAL), cat == Category.PERSONAL) { cat = Category.PERSONAL; unreadOnly = false; renderChips(); filter() }
+        chip(getString(R.string.cat_codes), cat == Category.CODES) { cat = Category.CODES; unreadOnly = false; renderChips(); filter() }
+        chip(getString(R.string.cat_banks) + count(Category.BANKS), cat == Category.BANKS) { cat = Category.BANKS; unreadOnly = false; renderChips(); filter() }
+        chip(getString(R.string.cat_offers) + count(Category.OFFERS), cat == Category.OFFERS) { cat = Category.OFFERS; unreadOnly = false; renderChips(); filter() }
     }
 
     private fun load() {
         Thread {
             Names.clear()
             val c = try { Sms.conversations(this) } catch (e: Exception) { emptyList() }
-            runOnUiThread { all = c; filter() }
+            Cleanup.run(this)
+            Scheduled.sendDue(this)
+            runOnUiThread { all = c; renderChips(); filter() }
         }.start()
     }
 
@@ -143,7 +151,7 @@ class MainActivity : SahlActivity() {
         val words = Norm.text(query).split(' ').filter { it.isNotBlank() }
         val dq = Norm.digits(query)
         shown = all.filter { cv ->
-            (!unreadOnly || cv.unread > 0) && (words.isEmpty() || words.all { w ->
+            (!unreadOnly || cv.unread > 0) && (cat == -1 || cv.category == cat) && (words.isEmpty() || words.all { w ->
                 Norm.text(cv.name ?: "").contains(w) || Norm.text(cv.snippet).contains(w) } || (dq.length >= 3 && Norm.digits(cv.address).contains(dq)))
         }
         // Search inside every message too
@@ -164,13 +172,16 @@ class MainActivity : SahlActivity() {
     } catch (e: Exception) { emptySet() }
 
     private fun open(cv: Conversation) {
-        startActivity(Intent(this, ThreadActivity::class.java).putExtra("thread", cv.threadId).putExtra("address", cv.address))
+        startActivity(Intent(this, ThreadActivity::class.java).putExtra("thread", cv.threadId)
+            .putExtra("address", if (cv.group) cv.members.joinToString(",") else cv.address))
     }
 
     private fun actions(cv: Conversation) {
         val items = mutableListOf<Triple<Int, String, () -> Unit>>(
             Triple(R.drawable.ic_check, getString(R.string.mark_read)) { Thread { Sms.markRead(this, cv.threadId) }.start() },
             Triple(R.drawable.ic_call, getString(R.string.call)) { Sahl.callVia(this, cv.address) },
+            Triple(R.drawable.ic_star, getString(if (cv.pinned) R.string.unpin else R.string.pin)) { Prefs.togglePin(this, cv.threadId); load() },
+            Triple(R.drawable.ic_bell, getString(if (cv.muted) R.string.unmute else R.string.mute)) { Prefs.toggleMute(this, cv.threadId); load() },
             Triple(R.drawable.ic_delete, getString(R.string.delete_chat)) {
                 AlertDialog.Builder(this).setMessage(R.string.delete_chat_q)
                     .setPositiveButton(R.string.delete) { _, _ -> Thread { Sms.deleteThread(this, cv.threadId); runOnUiThread { load() } }.start() }
@@ -205,7 +216,7 @@ class MainActivity : SahlActivity() {
             f.background = oval(avatarColor(title))
             letter.text = if (c.name != null) Norm.section(c.name).let { if (it == "#") "" else it } else ""
             if (letter.text.isEmpty()) f.addView(ImageView(this@MainActivity).apply {
-                setImageResource(if (c.address.any { it.isLetter() }) R.drawable.ic_work else R.drawable.ic_people)
+                setImageResource(if (c.group) R.drawable.ic_people else if (c.address.any { it.isLetter() }) R.drawable.ic_work else R.drawable.ic_person_add)
                 imageTintList = ColorStateList.valueOf(0xCCFFFFFF.toInt())
             }, FrameLayout.LayoutParams(px(24), px(24), Gravity.CENTER))
             Thumbs.load(this@MainActivity, c.photo, iv, letter)
@@ -215,9 +226,18 @@ class MainActivity : SahlActivity() {
             val bold = c.unread > 0
             top.addView(text(title, 16f, col(R.color.text), bold).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END },
                 LinearLayout.LayoutParams(0, -2, 1f))
+            if (c.pinned) top.addView(icon(R.drawable.ic_star, col(R.color.gold), 14).apply { (layoutParams as LinearLayout.LayoutParams).marginEnd = px(4) })
+            if (c.muted) top.addView(icon(R.drawable.ic_bell, col(R.color.sub), 14).apply { alpha = 0.5f; (layoutParams as LinearLayout.LayoutParams).marginEnd = px(4) })
             top.addView(text(stamp(c.date), 12f, if (bold) col(R.color.emerald) else col(R.color.sub), bold))
             t.addView(top)
             val bottom = LinearLayout(this@MainActivity).apply { gravity = Gravity.CENTER_VERTICAL }
+            Sms.otp(c.snippet)?.let { code -> bottom.addView(text(code, 12f, col(R.color.emerald), true).apply {
+                background = round(col(R.color.tonal), 10f); setPadding(px(8), px(2), px(8), px(2))
+                setOnClickListener {
+                    getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("code", code))
+                    toast(R.string.copied)
+                }
+            }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = px(6) }) }
             bottom.addView(text((if (c.outgoing) getString(R.string.you) + " " else "") + c.snippet.replace('\n', ' '), 14f,
                 if (bold) col(R.color.text) else col(R.color.sub)).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, px(2), 0, 0) },
                 LinearLayout.LayoutParams(0, -2, 1f))

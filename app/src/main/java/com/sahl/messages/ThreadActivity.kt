@@ -29,7 +29,14 @@ class ThreadActivity : SahlActivity() {
     private lateinit var input: EditText
     private lateinit var simChip: TextView
     private lateinit var counter: TextView
-    private var msgs: List<Msg> = emptyList()
+    private var msgs: List<Any> = emptyList()          // Msg (SMS) or MmsMsg (picture/group)
+    private var members: List<String> = emptyList()
+    private val group get() = members.size > 1
+    private var image: Uri? = null
+    private lateinit var attachBox: LinearLayout
+    private lateinit var undoBar: LinearLayout
+    private lateinit var schedBox: LinearLayout
+    private var pendingSend: Runnable? = null
     private var sims: List<Sim> = emptyList()
     private var subId = -1
 
@@ -42,14 +49,16 @@ class ThreadActivity : SahlActivity() {
         super.onCreate(savedInstanceState)
         address = intent.getStringExtra("address") ?: ""
         thread = intent.getLongExtra("thread", 0L)
-        if (thread == 0L && address.isNotBlank()) thread = Sms.threadFor(this, address)
-        val name = Names.of(this, address).first
+        members = address.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        if (thread == 0L && address.isNotBlank()) thread = if (group) try { Telephony.Threads.getOrCreateThreadId(this, members.toSet()) } catch (e: Exception) { 0L } else Sms.threadFor(this, address)
+        val name = if (group) Sms.groupName(this, members) else Names.of(this, address).first
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(col(R.color.bg)) }
         root.addView(header(name ?: address, true, listOf(
             R.drawable.ic_call to { Sahl.callVia(this, address) },
             R.drawable.ic_more to { menu() }
         ), large = false))
-        if (name != null || address.any { it.isLetter() }) Unit
+        if (group) root.addView(text(getString(R.string.group_of, members.size), 12f, col(R.color.sub)).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, px(4)) })
+        else if (name != null || address.any { it.isLetter() }) Unit
         else root.addView(text(listOfNotNull(getString(R.string.not_in_contacts), Countries.of(address, Sahl.countryCode(this), rtl)).joinToString("  ·  "),
             12f, col(R.color.sub)).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, px(4)) })
 
@@ -59,8 +68,27 @@ class ThreadActivity : SahlActivity() {
         }
         root.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
 
+        // Scheduled messages for this chat
+        schedBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(12), 0, px(12), 0) }
+        root.addView(schedBox)
+        // "Sending… Undo" bar
+        undoBar = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL; background = round(col(R.color.tonal), 18f); visibility = View.GONE
+            setPadding(px(16), px(8), px(8), px(8))
+            addView(text(getString(R.string.sending_soon), 14f), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(text(getString(R.string.undo), 14f, col(R.color.emerald), true).apply {
+                setPadding(px(14), px(6), px(14), px(6)); setOnClickListener { undo() }
+            }.press(14f))
+        }
+        root.addView(undoBar, LinearLayout.LayoutParams(-1, -2).apply { setMargins(px(12), px(4), px(12), 0) })
+        // Attached photo preview
+        attachBox = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE; setPadding(px(16), px(6), px(16), 0) }
+        root.addView(attachBox)
+
         // Compose bar
         val bar = LinearLayout(this).apply { gravity = Gravity.BOTTOM; setPadding(px(10), px(6), px(10), px(10)) }
+        bar.addView(iconButton(R.drawable.ic_add, 0, col(R.color.emerald), 46, 24) { pickImage() },
+            LinearLayout.LayoutParams(px(46), px(46)).apply { marginEnd = px(4); bottomMargin = px(4) })
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; background = round(col(R.color.tonal), 24f); setPaddingRelative(px(16), px(4), px(10), px(4))
         }
@@ -83,8 +111,9 @@ class ThreadActivity : SahlActivity() {
         meta.addView(simChip); meta.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f)); meta.addView(counter)
         box.addView(meta)
         bar.addView(box, LinearLayout.LayoutParams(0, -2, 1f))
-        bar.addView(iconButton(R.drawable.ic_send, col(R.color.emerald), 0xFFFFFFFF.toInt(), 50, 22) { send() },
-            LinearLayout.LayoutParams(px(50), px(50)).apply { marginStart = px(8); bottomMargin = px(2) })
+        bar.addView(iconButton(R.drawable.ic_send, col(R.color.emerald), 0xFFFFFFFF.toInt(), 50, 22) { send() }.apply {
+            setOnLongClickListener { sendLater(); true }
+        }, LinearLayout.LayoutParams(px(50), px(50)).apply { marginStart = px(8); bottomMargin = px(2) })
         root.addView(bar)
         setContentView(root)
         window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
@@ -120,27 +149,103 @@ class ThreadActivity : SahlActivity() {
     private fun load() {
         if (thread == 0L) return
         Thread {
-            val m = try { Sms.messages(this, thread) } catch (e: Exception) { emptyList() }
+            val sms = try { Sms.messages(this, thread) } catch (e: Exception) { emptyList() }
+            val mms = try { Mms.inThread(this, thread) } catch (e: Exception) { emptyList() }
+            val all: List<Any> = (sms + mms).sortedBy { if (it is Msg) it.date else (it as MmsMsg).date }
             Sms.markRead(this, thread); Notify.clear(this, thread)
-            runOnUiThread { msgs = m; list.adapter = Bubbles() }
+            runOnUiThread { msgs = all; list.adapter = Bubbles(); renderScheduled() }
         }.start()
     }
 
     private fun send() {
         val t = input.text.toString()
-        if (t.isBlank()) return
+        val img = image
+        if (t.isBlank() && img == null) return
         if (!Sms.isDefault(this)) { toast(R.string.make_default); return }
-        input.setText("")
+        input.setText(""); clearImage()
         val sub = subId
-        Thread {
-            Sms.send(this, address, t, sub)
-            if (thread == 0L) thread = Sms.threadFor(this, address)
-            runOnUiThread { load() }
-        }.start()
+        val job = Runnable {
+            undoBar.visibility = View.GONE; pendingSend = null
+            Thread {
+                if (group || img != null) Mms.send(this, members, t.ifBlank { null }, img, sub)
+                else Sms.send(this, address, t, sub)
+                runOnUiThread { load() }
+            }.start()
+        }
+        if (Prefs.undoSend(this)) {
+            pendingSend = job; undoText = t; undoImage = img
+            undoBar.visibility = View.VISIBLE
+            main.postDelayed(job, 3000)
+        } else job.run()
     }
 
+    private var undoText = ""
+    private var undoImage: Uri? = null
+    private fun undo() {
+        pendingSend?.let { main.removeCallbacks(it) }
+        pendingSend = null; undoBar.visibility = View.GONE
+        input.setText(undoText); input.setSelection(undoText.length)
+        undoImage?.let { setImage(it) }
+    }
+
+    /** Long-press send: pick a time to send later. */
+    private fun sendLater() {
+        val t = input.text.toString()
+        if (t.isBlank() || group) { toast(R.string.later_text_only); return }
+        val now = java.util.Calendar.getInstance()
+        android.app.DatePickerDialog(this, { _, y, m, d ->
+            android.app.TimePickerDialog(this, { _, h, min ->
+                val cal = java.util.Calendar.getInstance().apply { set(y, m, d, h, min, 0) }
+                if (cal.timeInMillis <= System.currentTimeMillis()) { toast(R.string.pick_future); return@TimePickerDialog }
+                Scheduled.add(this, address, t, cal.timeInMillis, subId)
+                input.setText(""); renderScheduled(); toast(R.string.scheduled_ok)
+            }, now.get(java.util.Calendar.HOUR_OF_DAY), now.get(java.util.Calendar.MINUTE), true).show()
+        }, now.get(java.util.Calendar.YEAR), now.get(java.util.Calendar.MONTH), now.get(java.util.Calendar.DAY_OF_MONTH)).show()
+    }
+
+    private fun renderScheduled() {
+        schedBox.removeAllViews()
+        if (group) return
+        for (it in Scheduled.forThread(this, address)) {
+            val row = LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL; background = round(col(R.color.tonal), 16f); setPadding(px(14), px(8), px(6), px(8))
+            }
+            row.addView(icon(R.drawable.ic_history, col(R.color.emerald), 18))
+            row.addView(text(getString(R.string.scheduled_for, stampFull(it.at)) + "\n" + it.body, 13f).apply {
+                maxLines = 2; setPaddingRelative(px(10), 0, px(6), 0) }, LinearLayout.LayoutParams(0, -2, 1f))
+            val id = it.id
+            row.addView(iconButton(R.drawable.ic_close, 0, col(R.color.sub), 36, 18) { Scheduled.cancel(this, id); renderScheduled() })
+            schedBox.addView(row, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(4) })
+        }
+    }
+
+    private fun stampFull(t: Long) = Instant.ofEpochMilli(t).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("EEE d MMM, HH:mm", loc()))
+
+    @Suppress("DEPRECATION")
+    private fun pickImage() {
+        try { startActivityForResult(Intent(Intent.ACTION_GET_CONTENT).setType("image/*"), 40) } catch (e: Exception) { }
+    }
+
+    @Deprecated("Activity result")
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        super.onActivityResult(req, res, data)
+        if (req == 40 && res == RESULT_OK) data?.data?.let { setImage(it) }
+    }
+
+    private fun setImage(u: Uri) {
+        image = u
+        attachBox.removeAllViews(); attachBox.visibility = View.VISIBLE
+        val iv = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true; background = round(col(R.color.card), 12f) }
+        attachBox.addView(iv, LinearLayout.LayoutParams(px(64), px(64)))
+        attachBox.addView(text(getString(R.string.photo_attached), 13f, col(R.color.sub)).apply { setPaddingRelative(px(12), 0, 0, 0) }, LinearLayout.LayoutParams(0, -2, 1f))
+        attachBox.addView(iconButton(R.drawable.ic_close, 0, col(R.color.sub), 36, 18) { clearImage() })
+        Thread { val b = Images.load(this, u, 200); runOnUiThread { iv.setImageBitmap(b) } }.start()
+    }
+
+    private fun clearImage() { image = null; attachBox.removeAllViews(); attachBox.visibility = View.GONE }
+
     private fun menu() {
-        sheet(Names.of(this, address).first ?: address, listOf(
+        sheet(if (group) Sms.groupName(this, members) else Names.of(this, address).first ?: address, listOf(
             Triple(R.drawable.ic_call, getString(R.string.call)) { Sahl.callVia(this, address) },
             Triple(R.drawable.ic_person_add, getString(R.string.add_contact)) {
                 val i = Intent(Intent.ACTION_INSERT).setType(android.provider.ContactsContract.Contacts.CONTENT_TYPE)
@@ -149,6 +254,8 @@ class ThreadActivity : SahlActivity() {
                 try { startActivity(i) } catch (e: Exception) { }
             },
             Triple(R.drawable.ic_copy, getString(R.string.copy_number)) { copy(address) },
+            Triple(R.drawable.ic_star, getString(if (Prefs.pinned(this, thread)) R.string.unpin else R.string.pin)) { Prefs.togglePin(this, thread) },
+            Triple(R.drawable.ic_bell, getString(if (Prefs.muted(this, thread)) R.string.unmute else R.string.mute)) { Prefs.toggleMute(this, thread) },
             Triple(R.drawable.ic_delete, getString(R.string.delete_chat)) {
                 AlertDialog.Builder(this).setMessage(R.string.delete_chat_q)
                     .setPositiveButton(R.string.delete) { _, _ -> Thread { Sms.deleteThread(this, thread); runOnUiThread { finish() } }.start() }
@@ -187,14 +294,54 @@ class ThreadActivity : SahlActivity() {
     }
     private fun time(t: Long) = Instant.ofEpochMilli(t).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm", loc()))
 
+    private fun dateOf(o: Any) = if (o is Msg) o.date else (o as MmsMsg).date
+
+    /** Picture / group message bubble. */
+    private fun mmsBubble(p: Int, m: MmsMsg): View {
+        val outer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(12), px(2), px(12), px(2)) }
+        if (p == 0 || day(dateOf(msgs[p - 1])) != day(m.date)) outer.addView(text(dayLabel(day(m.date)), 12f, col(R.color.sub), true).apply {
+            gravity = Gravity.CENTER; setPadding(0, px(12), 0, px(8)) }, LinearLayout.LayoutParams(-1, -2))
+        val mine = m.outgoing
+        if (group && !mine && m.from != null) outer.addView(text(Names.of(this, m.from).first ?: m.from, 12f, col(R.color.emerald), true).apply {
+            setPaddingRelative(px(8), px(4), 0, px(2)) })
+        val bubble = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; background = round(if (mine) col(R.color.emerald) else col(R.color.card), 18f)
+            setPadding(px(6), px(6), px(6), px(6))
+            setOnLongClickListener {
+                sheet(null, listOf(Triple(R.drawable.ic_delete, getString(R.string.delete)) { Thread { Mms.delete(this@ThreadActivity, m.id); runOnUiThread { load() } }.start() }))
+                true
+            }
+        }
+        for (img in m.images) {
+            val iv = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; clipToOutline = true; background = round(0x22000000, 14f); adjustViewBounds = true }
+            bubble.addView(iv, LinearLayout.LayoutParams(px(230), px(230)).apply { bottomMargin = px(4) })
+            val u = Uri.parse("content://mms/part/$img")
+            iv.setOnClickListener { try { startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(u, "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) } catch (e: Exception) { } }
+            Thread { val b = Images.load(this, u, 700); runOnUiThread { iv.setImageBitmap(b) } }.start()
+        }
+        val fg = if (mine) 0xFFFFFFFF.toInt() else col(R.color.text)
+        if (m.text.isNotBlank()) bubble.addView(text(m.text, 16f, fg).apply {
+            autoLinkMask = Linkify.WEB_URLS or Linkify.PHONE_NUMBERS; setPadding(px(8), px(4), px(8), 0) })
+        val status = when (m.box) { Telephony.Mms.MESSAGE_BOX_FAILED -> getString(R.string.failed_tap); Telephony.Mms.MESSAGE_BOX_OUTBOX -> getString(R.string.sending); else -> "" }
+        bubble.addView(text(listOf(time(m.date), status).filter { it.isNotEmpty() }.joinToString(" · "), 11f,
+            if (mine) 0xCCFFFFFF.toInt() else col(R.color.sub)).apply { gravity = Gravity.END; setPadding(px(8), px(3), px(8), px(2)) },
+            LinearLayout.LayoutParams(-1, -2))
+        val holder = LinearLayout(this).apply { gravity = if (mine) Gravity.END else Gravity.START }
+        holder.addView(bubble, LinearLayout.LayoutParams(-2, -2).apply { if (mine) marginStart = px(56) else marginEnd = px(56) })
+        outer.addView(holder, LinearLayout.LayoutParams(-1, -2))
+        return outer
+    }
+
     private inner class Bubbles : BaseAdapter() {
         override fun getCount() = msgs.size
         override fun getItem(p: Int) = msgs[p]
-        override fun getItemId(p: Int) = msgs[p].id
+        override fun getItemId(p: Int) = p.toLong()
         override fun getView(p: Int, cv: View?, parent: ViewGroup): View {
-            val m = msgs[p]
+            val item = msgs[p]
+            if (item is MmsMsg) return mmsBubble(p, item)
+            val m = item as Msg
             val outer = LinearLayout(this@ThreadActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(px(12), px(2), px(12), px(2)) }
-            if (p == 0 || day(msgs[p - 1].date) != day(m.date)) outer.addView(text(dayLabel(day(m.date)), 12f, col(R.color.sub), true).apply {
+            if (p == 0 || day(dateOf(msgs[p - 1])) != day(m.date)) outer.addView(text(dayLabel(day(m.date)), 12f, col(R.color.sub), true).apply {
                 gravity = Gravity.CENTER; setPadding(0, px(12), 0, px(8))
             }, LinearLayout.LayoutParams(-1, -2))
             val mine = m.outgoing
@@ -218,7 +365,8 @@ class ThreadActivity : SahlActivity() {
                 setLinkTextColor(if (mine) 0xFFFFFFFF.toInt() else col(R.color.emerald))
                 setTextIsSelectable(false)
             })
-            val status = when { m.failed -> getString(R.string.failed_tap); m.pending -> getString(R.string.sending); else -> "" }
+            val status = when { m.failed -> getString(R.string.failed_tap); m.pending -> getString(R.string.sending)
+                mine && m.delivered -> "✓✓"; mine -> "✓"; else -> "" }
             bubble.addView(text(listOf(time(m.date), status).filter { it.isNotEmpty() }.joinToString(" · "), 11f,
                 if (mine || m.failed) 0xCCFFFFFF.toInt() else col(R.color.sub)).apply { gravity = Gravity.END; setPadding(0, px(3), 0, 0) },
                 LinearLayout.LayoutParams(-1, -2))
