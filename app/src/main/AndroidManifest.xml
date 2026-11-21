@@ -61,6 +61,9 @@
 
         <activity android:name=".SettingsActivity" android:exported="false" />
         <activity android:name=".StarredActivity" android:exported="false" />
+        <!-- Sahl Union: message history for the people timeline in Sahl Contacts -->
+        <provider android:name=".UnionProvider" android:authorities="com.sahl.messages.union"
+            android:exported="true" android:readPermission="com.sahl.permission.UNION" />
         <activity android:name=".CrashActivity" android:exported="false" android:process=":crash" />
 
         <receiver android:name=".SmsDeliverReceiver" android:exported="true"
