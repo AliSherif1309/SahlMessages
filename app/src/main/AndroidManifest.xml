@@ -38,7 +38,10 @@
             </intent-filter>
         </activity>
 
-        <activity android:name=".ThreadActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".ThreadActivity" android:exported="true" android:windowSoftInputMode="adjustResize"
+            android:permission="com.sahl.permission.UNION">
+            <intent-filter><action android:name="com.sahl.messages.action.OPEN" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>
+        </activity>
 
         <!-- Required for the default SMS app: compose from sms:/smsto: links and shares -->
         <activity android:name=".ComposeActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
