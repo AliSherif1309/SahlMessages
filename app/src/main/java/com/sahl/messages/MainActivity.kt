@@ -27,6 +27,10 @@ class MainActivity : SahlActivity() {
     private var query = ""
     private var unreadOnly = false
     private var cat = -1                       // -1 = all categories
+    private lateinit var dates: LinearLayout
+    private var dateFilter = 0                 // 0 any · 1 today · 2 yesterday · 3 last 7 days · 4 last 30 days · 5 picked day
+    private var pickedDay: java.time.LocalDate? = null
+    private var dateThreads: Set<Long>? = null // threads with messages in the chosen period
     private lateinit var list: ListView
     private lateinit var banner: LinearLayout
     private lateinit var empty: LinearLayout
@@ -49,6 +53,7 @@ class MainActivity : SahlActivity() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         frame.addView(root, FrameLayout.LayoutParams(-1, -1))
         root.addView(header(getString(R.string.app_name), false, listOf(
+            R.drawable.ic_star to { startActivity(Intent(this, StarredActivity::class.java)) },
             R.drawable.ic_tune to { startActivity(Intent(this, SettingsActivity::class.java)) })))
         banner = card().apply { background = round(col(R.color.tonal), 22f); elevation = 0f }
         root.addView(banner, LinearLayout.LayoutParams(-1, -2).apply { setMargins(px(16), px(4), px(16), px(6)) })
@@ -56,6 +61,8 @@ class MainActivity : SahlActivity() {
         root.addView(search, LinearLayout.LayoutParams(-1, -2).apply { setMargins(px(16), px(2), px(16), px(6)) })
         chips = LinearLayout(this).apply { setPaddingRelative(px(16), px(2), px(16), px(6)) }
         root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
+        dates = LinearLayout(this).apply { setPaddingRelative(px(16), 0, px(16), px(6)) }
+        root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(dates) })
         val body = FrameLayout(this)
         list = ListView(this).apply {
             divider = null; selector = android.graphics.drawable.ColorDrawable(0); clipToPadding = false; setPadding(0, 0, 0, px(96))
@@ -77,7 +84,7 @@ class MainActivity : SahlActivity() {
 
     override fun onResume() {
         super.onResume()
-        renderBanner(); renderChips()
+        renderBanner(); renderChips(); renderDates()
         if (granted()) {
             if (!observing) { contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, observer); observing = true }
             load()
@@ -165,6 +172,51 @@ class MainActivity : SahlActivity() {
         }
     } catch (e: Exception) { emptyList() }
 
+    private fun renderDates() {
+        dates.removeAllViews()
+        fun dchip(label: String, on: Boolean, go: () -> Unit) = dates.addView(text(label, 12f,
+            if (on) col(R.color.emerald) else col(R.color.sub), on).apply {
+            background = if (on) round(col(R.color.tonal), 14f) else round(0, 14f, col(R.color.line))
+            setPadding(px(12), px(6), px(12), px(6)); setOnClickListener { go() }
+        }.press(14f), LinearLayout.LayoutParams(-2, -2).apply { marginEnd = px(6) })
+        dchip(getString(R.string.any_time), dateFilter == 0) { setDate(0) }
+        dchip(getString(R.string.today), dateFilter == 1) { setDate(1) }
+        dchip(getString(R.string.yesterday), dateFilter == 2) { setDate(2) }
+        dchip(getString(R.string.last_7), dateFilter == 3) { setDate(3) }
+        dchip(getString(R.string.last_30), dateFilter == 4) { setDate(4) }
+        dchip(if (dateFilter == 5 && pickedDay != null) pickedDay!!.format(java.time.format.DateTimeFormatter.ofPattern("d MMM", resources.configuration.locales[0]))
+              else getString(R.string.pick_date), dateFilter == 5) {
+            val d = pickedDay ?: java.time.LocalDate.now()
+            android.app.DatePickerDialog(this, { _, y, m, day -> pickedDay = java.time.LocalDate.of(y, m + 1, day); setDate(5) },
+                d.year, d.monthValue - 1, d.dayOfMonth).show()
+        }
+    }
+
+    /** Finds conversations that have any message in the chosen period (not just the latest one). */
+    private fun setDate(i: Int) {
+        dateFilter = i; renderDates()
+        if (i == 0) { dateThreads = null; filter(); return }
+        val zone = java.time.ZoneId.systemDefault(); val today = java.time.LocalDate.now()
+        val (from, to) = when (i) {
+            1 -> today to today.plusDays(1)
+            2 -> today.minusDays(1) to today
+            3 -> today.minusDays(6) to today.plusDays(1)
+            4 -> today.minusDays(29) to today.plusDays(1)
+            else -> (pickedDay ?: today).let { it to it.plusDays(1) }
+        }
+        val a = from.atStartOfDay(zone).toInstant().toEpochMilli(); val b = to.atStartOfDay(zone).toInstant().toEpochMilli()
+        Thread {
+            val set = HashSet<Long>()
+            try {
+                contentResolver.query(Telephony.Sms.CONTENT_URI, arrayOf(Telephony.Sms.THREAD_ID), "${Telephony.Sms.DATE}>=? AND ${Telephony.Sms.DATE}<?",
+                    arrayOf(a.toString(), b.toString()), null)?.use { while (it.moveToNext()) set.add(it.getLong(0)) }
+                contentResolver.query(Telephony.Mms.CONTENT_URI, arrayOf("thread_id"), "date>=? AND date<?",
+                    arrayOf((a / 1000).toString(), (b / 1000).toString()), null)?.use { while (it.moveToNext()) set.add(it.getLong(0)) }
+            } catch (e: Exception) { }
+            runOnUiThread { dateThreads = set; filter() }
+        }.start()
+    }
+
     private fun load() {
         if (all.isEmpty()) { val cached = readCache(); if (cached.isNotEmpty()) { all = cached; renderChips(); filter() } }
         Thread {
@@ -181,7 +233,7 @@ class MainActivity : SahlActivity() {
         val words = Norm.text(query).split(' ').filter { it.isNotBlank() }
         val dq = Norm.digits(query)
         shown = all.filter { cv ->
-            (!unreadOnly || cv.unread > 0) && (cat == -1 || cv.category == cat) && (words.isEmpty() || words.all { w ->
+            (!unreadOnly || cv.unread > 0) && (cat == -1 || cv.category == cat) && (dateThreads?.contains(cv.threadId) ?: true) && (words.isEmpty() || words.all { w ->
                 Norm.text(cv.name ?: "").contains(w) || Norm.text(cv.snippet).contains(w) } || (dq.length >= 3 && Norm.digits(cv.address).contains(dq)))
         }
         // Search inside every message too

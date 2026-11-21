@@ -94,4 +94,13 @@
     <string name="backup_failed">Backup failed</string>
     <string name="my_numbers">My numbers</string>
     <string name="my_numbers_hint">Your own phone numbers (both SIMs), separated by commas — so group chats don’t list you.</string>
+    <string name="any_time">Any time</string>
+    <string name="last_7">Last 7 days</string>
+    <string name="last_30">Last 30 days</string>
+    <string name="pick_date">Pick a day</string>
+    <string name="starred">Starred messages</string>
+    <string name="no_starred">Long-press any message and tap “Star” to keep it here.</string>
+    <string name="star">Star</string>
+    <string name="unstar">Remove star</string>
+    <string name="open_maps">Open in Maps</string>
 </resources>

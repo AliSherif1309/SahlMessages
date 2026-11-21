@@ -291,7 +291,12 @@ class ThreadActivity : SahlActivity() {
     }
 
     private fun msgActions(m: Msg) {
+        val key = "s:" + m.id
+        val starred = Stars.isStarred(this, key)
         val items = mutableListOf<Triple<Int, String, () -> Unit>>(
+            Triple(if (starred) R.drawable.ic_star_border else R.drawable.ic_star, getString(if (starred) R.string.unstar else R.string.star)) {
+                Stars.toggle(this, key, thread, address, m.body, m.date); list.invalidateViews()
+            },
             Triple(R.drawable.ic_copy, getString(R.string.copy)) { copy(m.body) },
             Triple(R.drawable.ic_share, getString(R.string.share)) {
                 try { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, m.body), getString(R.string.share))) } catch (e: Exception) { }
@@ -389,7 +394,8 @@ class ThreadActivity : SahlActivity() {
             })
             val status = when { m.failed -> getString(R.string.failed_tap); m.pending -> getString(R.string.sending)
                 mine && m.delivered -> "✓✓"; mine -> "✓"; else -> "" }
-            bubble.addView(text(listOf(time(m.date), status).filter { it.isNotEmpty() }.joinToString(" · "), 11f,
+            val star = if (Stars.isStarred(this@ThreadActivity, "s:" + m.id)) "★ " else ""
+            bubble.addView(text(star + listOf(time(m.date), status).filter { it.isNotEmpty() }.joinToString(" · "), 11f,
                 if (mine || m.failed) 0xCCFFFFFF.toInt() else col(R.color.sub)).apply { gravity = Gravity.END; setPadding(0, px(3), 0, 0) },
                 LinearLayout.LayoutParams(-1, -2))
             if (m.failed) bubble.setOnClickListener { msgActions(m) }
@@ -412,6 +418,11 @@ class ThreadActivity : SahlActivity() {
                     chip(R.drawable.ic_bell, getString(R.string.add_calendar)) {
                         val title = (Names.of(this@ThreadActivity, address).first ?: address) + " — " + m.body.lineSequence().first().take(40)
                         try { startActivity(Assist.calendarIntent(title, m.body, at)) } catch (e: Exception) { }
+                    }
+                }
+                Places.mapsUri(m.body)?.let { u ->
+                    chip(R.drawable.ic_send, getString(R.string.open_maps)) {
+                        try { startActivity(Intent(Intent.ACTION_VIEW, u)) } catch (e: Exception) { }
                     }
                 }
                 Assist.tracking(m.body)?.let { tr ->

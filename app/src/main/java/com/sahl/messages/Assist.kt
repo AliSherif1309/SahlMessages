@@ -170,3 +170,43 @@ object Backup {
         return n
     }
 }
+
+/** Addresses and map links → "Open in Maps". Understands Qatar's Zone / Street / Building numbers. */
+object Places {
+    fun mapsUri(body: String): Uri? {
+        Regex("https?://(maps\\.app\\.goo\\.gl|goo\\.gl/maps|(www\\.)?google\\.[a-z.]+/maps|maps\\.google\\.[a-z.]+)\\S*", RegexOption.IGNORE_CASE)
+            .find(body)?.let { return Uri.parse(it.value) }
+        Regex("(-?\\d{1,2}\\.\\d{3,}),\\s*(-?\\d{1,3}\\.\\d{3,})").find(body)?.let {
+            return Uri.parse("geo:${it.groupValues[1]},${it.groupValues[2]}?q=${it.groupValues[1]},${it.groupValues[2]}")
+        }
+        val t = Norm.text(body)
+        val zone = Regex("(zone|منطقه)\\s*(?:no\\.?|رقم)?\\s*(\\d{1,3})").find(t)?.groupValues?.get(2)
+        val street = Regex("(street|st\\.?|شارع)\\s*(?:no\\.?|رقم)?\\s*(\\d{1,4})").find(t)?.groupValues?.get(2)
+        val building = Regex("(building|bldg\\.?|مبني|مبنى|بنايه)\\s*(?:no\\.?|رقم)?\\s*(\\d{1,4})").find(t)?.groupValues?.get(2)
+        if (zone != null && (street != null || building != null)) {
+            val q = listOfNotNull(building?.let { "Building $it" }, street?.let { "Street $it" }, "Zone $zone", "Qatar").joinToString(", ")
+            return Uri.parse("geo:0,0?q=" + Uri.encode(q))
+        }
+        return null
+    }
+}
+
+/** Starred messages: kept with a copy of the text so the list opens instantly. */
+object Stars {
+    data class Star(val key: String, val thread: Long, val address: String, val body: String, val date: Long)
+    private fun all(c: Context): JSONArray = try { JSONArray(Sahl.prefs(c).getString("stars", "[]")) } catch (e: Exception) { JSONArray() }
+
+    fun list(c: Context): List<Star> { val a = all(c); return (0 until a.length()).map { a.getJSONObject(it) }
+        .map { Star(it.getString("k"), it.getLong("t"), it.getString("a"), it.getString("b"), it.getLong("d")) }.sortedByDescending { it.date } }
+    fun keys(c: Context) = list(c).map { it.key }.toSet()
+    fun isStarred(c: Context, key: String) = key in keys(c)
+
+    fun toggle(c: Context, key: String, thread: Long, address: String, body: String, date: Long): Boolean {
+        val l = list(c).toMutableList()
+        val on = l.none { it.key == key }
+        if (on) l.add(Star(key, thread, address, body, date)) else l.removeAll { it.key == key }
+        Sahl.prefs(c).edit().putString("stars", JSONArray(l.map { JSONObject().put("k", it.key).put("t", it.thread).put("a", it.address)
+            .put("b", it.body).put("d", it.date) }).toString()).apply()
+        return on
+    }
+}

@@ -94,4 +94,13 @@
     <string name="backup_failed">فشل النسخ</string>
     <string name="my_numbers">أرقامي</string>
     <string name="my_numbers_hint">أرقامك (الشريحتين) مفصولة بفاصلة — حتى لا تظهر في المجموعات.</string>
+    <string name="any_time">أي وقت</string>
+    <string name="last_7">آخر 7 أيام</string>
+    <string name="last_30">آخر 30 يومًا</string>
+    <string name="pick_date">اختر يومًا</string>
+    <string name="starred">الرسائل المميزة بنجمة</string>
+    <string name="no_starred">اضغط مطولًا على أي رسالة واختر «تمييز بنجمة» لتظهر هنا.</string>
+    <string name="star">تمييز بنجمة</string>
+    <string name="unstar">إزالة النجمة</string>
+    <string name="open_maps">افتح في الخرائط</string>
 </resources>
