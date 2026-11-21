@@ -278,6 +278,9 @@ class ThreadActivity : SahlActivity() {
             Triple(R.drawable.ic_copy, getString(R.string.copy_number)) { copy(address) },
             Triple(R.drawable.ic_star, getString(if (Prefs.pinned(this, thread)) R.string.unpin else R.string.pin)) { Prefs.togglePin(this, thread) },
             Triple(R.drawable.ic_bell, getString(if (Prefs.muted(this, thread)) R.string.unmute else R.string.mute)) { Prefs.toggleMute(this, thread) },
+            Triple(R.drawable.ic_visibility_off, getString(if (Prefs.hiddenChat(this, thread)) R.string.show_previews else R.string.hide_previews)) {
+                Prefs.toggleHiddenChat(this, thread); toast(if (Prefs.hiddenChat(this, thread)) R.string.previews_hidden else R.string.previews_shown)
+            },
             Triple(R.drawable.ic_delete, getString(R.string.delete_chat)) {
                 AlertDialog.Builder(this).setMessage(R.string.delete_chat_q)
                     .setPositiveButton(R.string.delete) { _, _ -> Thread { Sms.deleteThread(this, thread); runOnUiThread { finish() } }.start() }

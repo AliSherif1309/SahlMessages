@@ -25,6 +25,11 @@ object Prefs {
     fun deliveryReports(c: Context) = Sahl.prefs(c).getBoolean("delivery", true)
     fun undoSend(c: Context) = Sahl.prefs(c).getBoolean("undo_send", true)
     fun cleanCodes(c: Context) = Sahl.prefs(c).getBoolean("clean_codes", false)
+    /** Hide message text in notifications (for everyone, or just some chats). */
+    fun hideAll(c: Context) = Sahl.prefs(c).getBoolean("hide_previews", false)
+    fun hiddenChat(c: Context, thread: Long) = thread.toString() in set(c, "hidden_chats")
+    fun toggleHiddenChat(c: Context, thread: Long) = toggle(c, "hidden_chats", thread)
+    fun hidden(c: Context, thread: Long) = hideAll(c) || hiddenChat(c, thread)
 }
 
 /** Smart inbox: sorts conversations into Personal, Codes, Banks and Offers. */

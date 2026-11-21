@@ -340,40 +340,59 @@ object Notify {
     }
 
     fun message(c: Context, address: String, body: String, threadId: Long = -1L, groupName: String? = null) {
-        channel(c)
-        val w = Sahl.wrap(c)
         val thread = if (threadId > 0) threadId else Sms.threadFor(c, address)
         val id = thread.toInt()
+        // Keep the last few lines of this conversation in the notification
+        val prev = Sahl.prefs(c).getString("n_$id", "") ?: ""
+        val lines = (prev.split('\u0001').filter { it.isNotEmpty() } + body).takeLast(5)
+        Sahl.prefs(c).edit().putString("n_$id", lines.joinToString("\u0001"))
+            .putString("na_$id", address).putString("ng_$id", groupName ?: "").apply()
+        post(c, thread, false)
+    }
+
+    /** "Show" was tapped on a hidden notification: show the text, quietly. */
+    fun reveal(c: Context, thread: Long) = post(c, thread, true)
+
+    private fun post(c: Context, thread: Long, reveal: Boolean) {
+        channel(c)
+        val w = Sahl.wrap(c)
+        val id = thread.toInt()
+        val p = Sahl.prefs(c)
+        val address = p.getString("na_$id", "") ?: ""
+        val groupName = (p.getString("ng_$id", "") ?: "").ifEmpty { null }
+        val lines = (p.getString("n_$id", "") ?: "").split('\u0001').filter { it.isNotEmpty() }
+        if (lines.isEmpty() || address.isEmpty()) return
+        val body = lines.last()
+        val hidden = !reveal && Prefs.hidden(c, thread)
         val name = Names.of(c, address).first ?: address
         val open = PendingIntent.getActivity(c, id, Intent(c, ThreadActivity::class.java).putExtra("thread", thread).putExtra("address", address)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val sender = NPerson.Builder().setName(groupName ?: name).build()
         val me = NPerson.Builder().setName(w.getString(R.string.me)).build()
-        // Keep the last few lines of this conversation in the notification
-        val prev = Sahl.prefs(c).getString("n_$id", "") ?: ""
-        val lines = (prev.split('\u0001').filter { it.isNotEmpty() } + body).takeLast(5)
-        Sahl.prefs(c).edit().putString("n_$id", lines.joinToString("\u0001")).apply()
         val style = Notification.MessagingStyle(me)
         val now = System.currentTimeMillis()
-        lines.forEachIndexed { i, l -> style.addMessage(l, now - (lines.size - i) * 1000L, sender) }
+        if (hidden) style.addMessage(w.getString(R.string.hidden_preview, lines.size), now, sender)
+        else lines.forEachIndexed { i, l -> style.addMessage(l, now - (lines.size - i) * 1000L, sender) }
 
+        fun action(label: String, code: Int, act: String, extra: Intent.() -> Unit = {}) = Notification.Action.Builder(null, label,
+            PendingIntent.getBroadcast(c, id + code, Intent(c, ActionReceiver::class.java).setAction(act).putExtra("thread", thread).apply(extra),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
         val reply = Notification.Action.Builder(null, w.getString(R.string.reply),
             PendingIntent.getBroadcast(c, id, Intent(c, ActionReceiver::class.java).setAction("reply").putExtra("address", address).putExtra("thread", thread),
                 PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .addRemoteInput(RemoteInput.Builder(KEY_REPLY).setLabel(w.getString(R.string.reply)).build()).build()
-        val read = Notification.Action.Builder(null, w.getString(R.string.mark_read),
-            PendingIntent.getBroadcast(c, id + 1, Intent(c, ActionReceiver::class.java).setAction("read").putExtra("thread", thread),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
-        val warn = if (groupName == null) Assist.warning(c, address, body, Names.of(c, address).first != null) else null
+        val warn = if (groupName == null && !hidden) Assist.warning(c, address, body, Names.of(c, address).first != null) else null
         val b = Notification.Builder(c, CH).setSmallIcon(R.drawable.ic_chat).setStyle(style)
             .apply { if (warn != null) setSubText("⚠ " + warn) }
             .setContentIntent(open).setAutoCancel(true).setCategory(Notification.CATEGORY_MESSAGE)
-            .addAction(reply).addAction(read)
-        Sms.otp(body)?.let { code ->
-            b.addAction(Notification.Action.Builder(null, w.getString(R.string.copy_code, code),
-                PendingIntent.getBroadcast(c, id + 2, Intent(c, ActionReceiver::class.java).setAction("copy").putExtra("code", code).putExtra("thread", thread),
-                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build())
-        }
+            .setOnlyAlertOnce(reveal)
+            .setVisibility(if (hidden) Notification.VISIBILITY_PRIVATE else Notification.VISIBILITY_PRIVATE)
+        // Hidden: "Show" comes first, then the usual quick buttons
+        if (hidden) b.addAction(action(w.getString(R.string.show), 3, "show"))
+        b.addAction(reply)
+        val code = Sms.otp(body)
+        if (code != null) b.addAction(action(if (hidden) w.getString(R.string.copy_code_hidden) else w.getString(R.string.copy_code, code), 2, "copy") { putExtra("code", code) })
+        else b.addAction(action(w.getString(R.string.mark_read), 1, "read"))
         c.getSystemService(NotificationManager::class.java)?.notify(id, b.build())
     }
 
@@ -400,6 +419,7 @@ class ActionReceiver : BroadcastReceiver() {
                 Sms.markRead(c, thread); Notify.clear(c, thread)
             }
             "read" -> { Sms.markRead(c, thread); Notify.clear(c, thread) }
+            "show" -> Notify.reveal(c, thread)
             "copy" -> {
                 c.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("code", intent.getStringExtra("code")))
                 Toast.makeText(c, Sahl.wrap(c).getString(R.string.copied), Toast.LENGTH_SHORT).show()

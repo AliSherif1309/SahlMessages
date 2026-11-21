@@ -264,6 +264,9 @@ class MainActivity : SahlActivity() {
             Triple(R.drawable.ic_call, getString(R.string.call)) { Sahl.callVia(this, cv.address) },
             Triple(R.drawable.ic_star, getString(if (cv.pinned) R.string.unpin else R.string.pin)) { Prefs.togglePin(this, cv.threadId); load() },
             Triple(R.drawable.ic_bell, getString(if (cv.muted) R.string.unmute else R.string.mute)) { Prefs.toggleMute(this, cv.threadId); load() },
+            Triple(R.drawable.ic_visibility_off, getString(if (Prefs.hiddenChat(this, cv.threadId)) R.string.show_previews else R.string.hide_previews)) {
+                Prefs.toggleHiddenChat(this, cv.threadId); toast(if (Prefs.hiddenChat(this, cv.threadId)) R.string.previews_hidden else R.string.previews_shown)
+            },
             Triple(R.drawable.ic_delete, getString(R.string.delete_chat)) {
                 AlertDialog.Builder(this).setMessage(R.string.delete_chat_q)
                     .setPositiveButton(R.string.delete) { _, _ -> Thread { Sms.deleteThread(this, cv.threadId); runOnUiThread { load() } }.start() }

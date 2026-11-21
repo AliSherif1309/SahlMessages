@@ -105,4 +105,12 @@
     <string name="open_maps">Open in Maps</string>
     <string name="select_text">Select text</string>
     <string name="copy_selected">Copy selected</string>
+    <string name="hidden_preview">🔒 %1$d hidden message(s) — tap Show</string>
+    <string name="show">Show</string>
+    <string name="copy_code_hidden">Copy code</string>
+    <string name="hide_previews">Hide previews in notifications</string>
+    <string name="show_previews">Show previews in notifications</string>
+    <string name="previews_hidden">Notifications for this chat will hide the text</string>
+    <string name="previews_shown">Notifications for this chat will show the text</string>
+    <string name="set_hide">Hide message text in notifications (tap Show to read)</string>
 </resources>

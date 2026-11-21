@@ -45,6 +45,7 @@ class SettingsActivity : SahlActivity() {
             isChecked = p.getBoolean(key, def); setPadding(0, px(6), 0, px(6))
             setOnCheckedChangeListener { _, on -> p.edit().putBoolean(key, on).apply() }
         })
+        sw(R.string.set_hide, "hide_previews", false)
         sw(R.string.set_undo, "undo_send", true)
         sw(R.string.set_delivery, "delivery", true)
         sw(R.string.set_clean, "clean_codes", false)

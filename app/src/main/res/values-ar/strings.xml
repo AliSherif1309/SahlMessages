@@ -105,4 +105,12 @@
     <string name="open_maps">افتح في الخرائط</string>
     <string name="select_text">تحديد النص</string>
     <string name="copy_selected">نسخ المحدد</string>
+    <string name="hidden_preview">🔒 %1$d رسالة مخفية — اضغط إظهار</string>
+    <string name="show">إظهار</string>
+    <string name="copy_code_hidden">نسخ الرمز</string>
+    <string name="hide_previews">إخفاء النص في الإشعارات</string>
+    <string name="show_previews">إظهار النص في الإشعارات</string>
+    <string name="previews_hidden">ستُخفي إشعارات هذه المحادثة النص</string>
+    <string name="previews_shown">ستُظهر إشعارات هذه المحادثة النص</string>
+    <string name="set_hide">إخفاء نص الرسائل في الإشعارات (اضغط إظهار للقراءة)</string>
 </resources>
