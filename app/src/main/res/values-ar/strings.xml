@@ -103,4 +103,6 @@
     <string name="star">تمييز بنجمة</string>
     <string name="unstar">إزالة النجمة</string>
     <string name="open_maps">افتح في الخرائط</string>
+    <string name="select_text">تحديد النص</string>
+    <string name="copy_selected">نسخ المحدد</string>
 </resources>

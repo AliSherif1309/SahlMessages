@@ -286,6 +286,24 @@ class ThreadActivity : SahlActivity() {
         ))
     }
 
+    /** Shows the message with selectable text — pick any part and copy it. */
+    private fun selectText(body: String) {
+        val tv = TextView(this).apply {
+            text = body; textSize = 17f; typeface = font; setTextColor(col(R.color.text)); setTextIsSelectable(true)
+            setPadding(px(22), px(16), px(22), px(8)); setLineSpacing(0f, 1.15f)
+        }
+        val sv = ScrollView(this).apply { addView(tv) }
+        val d = AlertDialog.Builder(this).setTitle(R.string.select_text).setView(sv)
+            .setPositiveButton(R.string.copy_selected) { _, _ ->
+                val a = tv.selectionStart; val b = tv.selectionEnd
+                copy(if (a in 0 until b) body.substring(a, b) else body)
+            }
+            .setNegativeButton(R.string.cancel, null).show()
+        // Long-press a word to start selecting; drag the handles to adjust
+        tv.post { tv.requestFocus() }
+        d.window?.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
+    }
+
     private fun copy(s: String) {
         getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("text", s)); toast(R.string.copied)
     }
@@ -298,6 +316,7 @@ class ThreadActivity : SahlActivity() {
                 Stars.toggle(this, key, thread, address, m.body, m.date); list.invalidateViews()
             },
             Triple(R.drawable.ic_copy, getString(R.string.copy)) { copy(m.body) },
+            Triple(R.drawable.ic_edit, getString(R.string.select_text)) { selectText(m.body) },
             Triple(R.drawable.ic_share, getString(R.string.share)) {
                 try { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, m.body), getString(R.string.share))) } catch (e: Exception) { }
             })
@@ -335,7 +354,13 @@ class ThreadActivity : SahlActivity() {
             orientation = LinearLayout.VERTICAL; background = round(if (mine) col(R.color.emerald) else col(R.color.card), 18f)
             setPadding(px(6), px(6), px(6), px(6))
             setOnLongClickListener {
-                sheet(null, listOf(Triple(R.drawable.ic_delete, getString(R.string.delete)) { Thread { Mms.delete(this@ThreadActivity, m.id); runOnUiThread { load() } }.start() }))
+                val items = mutableListOf<Triple<Int, String, () -> Unit>>()
+                if (m.text.isNotBlank()) {
+                    items.add(Triple(R.drawable.ic_copy, getString(R.string.copy)) { copy(m.text) })
+                    items.add(Triple(R.drawable.ic_edit, getString(R.string.select_text)) { selectText(m.text) })
+                }
+                items.add(Triple(R.drawable.ic_delete, getString(R.string.delete)) { Thread { Mms.delete(this@ThreadActivity, m.id); runOnUiThread { load() } }.start() })
+                sheet(null, items)
                 true
             }
         }
