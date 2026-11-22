@@ -49,6 +49,7 @@ class SettingsActivity : SahlActivity() {
         sw(R.string.set_undo, "undo_send", true)
         sw(R.string.set_delivery, "delivery", true)
         sw(R.string.set_clean, "clean_codes", false)
+        sw(R.string.set_prayer_silence, "prayer_silence", false)
 
         val bk = card(R.string.backup)
         bk.addView(text(getString(R.string.backup_hint), 12f, col(R.color.sub)))
@@ -67,6 +68,7 @@ class SettingsActivity : SahlActivity() {
 
         val un = card(R.string.union)
         un.addView(text(getString(R.string.union_desc), 14f, col(R.color.sub)))
+        un.addView(SahlUnionApps.strip(this))
     }
 
     @Deprecated("Activity result")

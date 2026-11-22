@@ -113,4 +113,5 @@
     <string name="previews_hidden">ستُخفي إشعارات هذه المحادثة النص</string>
     <string name="previews_shown">ستُظهر إشعارات هذه المحادثة النص</string>
     <string name="set_hide">إخفاء نص الرسائل في الإشعارات (اضغط إظهار للقراءة)</string>
+    <string name="set_prayer_silence">كتم إشعارات الرسائل وقت الصلاة (عبر أذان سهل)</string>
 </resources>
