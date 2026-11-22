@@ -81,6 +81,7 @@ class MainActivity : SahlActivity() {
             FrameLayout.LayoutParams(px(58), px(58), Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, px(22), px(26)) })
         setContentView(frame)
         Updater.dailyCheck(this)
+        Updater.checkOnStart(this)
         if (!crashOpen && !granted()) askPermissions()
     }
 
