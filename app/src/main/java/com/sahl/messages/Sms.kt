@@ -470,6 +470,7 @@ object Notify {
             .apply { if (warn != null) setSubText("⚠ " + warn) }
             .setContentIntent(open).setAutoCancel(true).setCategory(Notification.CATEGORY_MESSAGE)
             .setOnlyAlertOnce(reveal)
+            .setSilent(PrayerSilence.inPrayer(c))
             .setVisibility(if (hidden) Notification.VISIBILITY_PRIVATE else Notification.VISIBILITY_PRIVATE)
         // Hidden: "Show" comes first, then the usual quick buttons
         if (hidden) b.addAction(action(w.getString(R.string.show), 3, "show"))
@@ -478,6 +479,25 @@ object Notify {
         if (code != null) b.addAction(action(if (hidden) w.getString(R.string.copy_code_hidden) else w.getString(R.string.copy_code, code), 2, "copy") { putExtra("code", code) })
         else b.addAction(action(w.getString(R.string.mark_read), 1, "read"))
         c.getSystemService(NotificationManager::class.java)?.notify(id, b.build())
+    }
+
+    object PrayerSilence {
+        fun inPrayer(c: Context, now: Long = System.currentTimeMillis()): Boolean {
+            if (!Sahl.prefs(c).getBoolean("prayer_silence", false)) return false
+            val win = 20 * 60_000L
+            try {
+                c.contentResolver.query(Uri.parse(Sahl.ADHAN_UNION + "/prayers"), null, null, null, null)?.use {
+                    val col = it.getColumnIndex("time")
+                    while (it.moveToNext()) {
+                        if (col >= 0) {
+                            val t = it.getLong(col)
+                            if (now >= t && now < t + win) return true
+                        }
+                    }
+                }
+            } catch (_: Exception) { }
+            return false
+        }
     }
 
     fun clear(c: Context, thread: Long) {

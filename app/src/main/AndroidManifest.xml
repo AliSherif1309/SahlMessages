@@ -16,6 +16,13 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <queries>
+        <package android:name="com.sahl.pdf" />
+        <package android:name="com.aly.trueqibla" />
+        <package android:name="com.aly.sahlsync" />
+        <package android:name="com.sahl.adhan" />
+        <package android:name="com.sahl.files" />
+        <package android:name="com.sahl.gallery" />
+        <package android:name="com.sahl.camera" />
         <package android:name="com.sahl.contacts" />
         <package android:name="com.sahl.phone" />
         <package android:name="com.sahl.tools" />
