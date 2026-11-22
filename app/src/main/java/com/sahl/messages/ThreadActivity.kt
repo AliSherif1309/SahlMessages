@@ -52,7 +52,7 @@ class ThreadActivity : SahlActivity() {
         address = intent.getStringExtra("address") ?: ""
         thread = intent.getLongExtra("thread", 0L)
         members = address.split(',').map { it.trim() }.filter { it.isNotEmpty() }
-        if (thread == 0L && address.isNotBlank()) thread = if (group) try { Telephony.Threads.getOrCreateThreadId(this, members.toSet()) } catch (e: Exception) { 0L } else Sms.threadFor(this, address)
+        if (thread == 0L && address.isNotBlank()) thread = if (group) try { Telephony.Threads.getOrCreateThreadId(this, members.toSet()) } catch (e: Exception) { 0L } else Sms.existingThreadFor(this, address)
         val name = if (group) Sms.groupName(this, members) else Names.of(this, address).first
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(col(R.color.bg)) }
         root.addView(header(name ?: address, true, listOf(
@@ -191,6 +191,7 @@ class ThreadActivity : SahlActivity() {
             Thread {
                 if (group || img != null) Mms.send(this, members, t.ifBlank { null }, img, sub)
                 else Sms.send(this, address, t, sub)
+                if (thread == 0L && address.isNotBlank()) thread = if (group) try { Telephony.Threads.getOrCreateThreadId(this, members.toSet()) } catch (e: Exception) { 0L } else Sms.threadFor(this, address)
                 runOnUiThread { load() }
             }.start()
         }

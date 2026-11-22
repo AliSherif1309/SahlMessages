@@ -88,7 +88,7 @@ class ComposeActivity : SahlActivity() {
 
     private fun open(number: String) {
         startActivity(Intent(this, ThreadActivity::class.java).putExtra("address", number)
-            .putExtra("thread", Sms.threadFor(this, number)).apply { shared?.let { putExtra("body", it) } })
+            .putExtra("thread", Sms.existingThreadFor(this, number)).apply { shared?.let { putExtra("body", it) } })
         finish()
     }
 }

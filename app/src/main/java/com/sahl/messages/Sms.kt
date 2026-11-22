@@ -43,6 +43,12 @@ data class Sim(val subId: Int, val label: String)
 /** Names come from Sahl Contacts (Sahl Union) or Android contacts. */
 object Names {
     private val cache = ConcurrentHashMap<String, Pair<String?, String?>>()
+    fun cached(number: String): Pair<String?, String?> = if (number.isBlank()) null to null else cache[number] ?: (null to null)
+    fun seed(list: List<Conversation>) {
+        for (c in list) if (!c.group && c.address.isNotBlank() && c.name != null && !cache.containsKey(c.address)) {
+            cache[c.address] = c.name to c.photo
+        }
+    }
     fun of(c: Context, number: String): Pair<String?, String?> {
         if (number.isBlank()) return null to null
         cache[number]?.let { return it }
@@ -76,13 +82,31 @@ object Sms {
     fun myNumbers(c: Context): Set<String> =
         (Sahl.prefs(c).getString("my_numbers", "") ?: "").split(',', ' ', '\n').map { Norm.phoneKey(it) }.filter { it.length >= 7 }.toSet()
 
+    fun saveCache(c: Context, l: List<Conversation>) {
+        val a = org.json.JSONArray()
+        for (cv in l.take(60)) a.put(org.json.JSONObject().put("t", cv.threadId).put("a", cv.address).put("s", cv.snippet).put("d", cv.date)
+            .put("u", cv.unread).put("n", cv.name ?: "").put("p", cv.photo ?: "").put("c", cv.category).put("pin", cv.pinned).put("m", cv.muted)
+            .put("g", org.json.JSONArray(cv.members)))
+        Sahl.prefs(c).edit().putString("list_cache", a.toString()).apply()
+    }
+
+    fun readCache(c: Context): List<Conversation> = try {
+        val a = org.json.JSONArray(Sahl.prefs(c).getString("list_cache", "[]"))
+        (0 until a.length()).map { a.getJSONObject(it) }.filter { it.optString("s", "").isNotBlank() }.map { o ->
+            val g = o.optJSONArray("g"); val members = if (g == null) emptyList() else (0 until g.length()).map { g.getString(it) }
+            Conversation(o.getLong("t"), o.getString("a"), o.getString("s"), o.getLong("d"), o.getInt("u"), false,
+                o.getString("n").ifEmpty { null }, o.getString("p").ifEmpty { null }, o.getInt("c"), o.getBoolean("pin"), o.getBoolean("m"), members)
+        }
+    } catch (e: Exception) { emptyList() }
+
     /**
      * Fast path: Android keeps one row per conversation (thread) with its snippet and date,
      * so we read those directly instead of scanning every message.
      */
-    fun conversations(c: Context): List<Conversation> = try { fastConversations(c) } catch (e: Exception) { slowConversations(c) }
+    fun conversations(c: Context, lookupContacts: Boolean = true): List<Conversation> =
+        try { fastConversations(c, lookupContacts) } catch (e: Exception) { slowConversations(c, lookupContacts = lookupContacts) }
 
-    private fun fastConversations(c: Context): List<Conversation> {
+    private fun fastConversations(c: Context, lookupContacts: Boolean = true): List<Conversation> {
         val cr = c.contentResolver
         // recipient id -> phone number
         val canon = HashMap<Long, String>()
@@ -103,28 +127,39 @@ object Sms {
         val mine = myNumbers(c)
         val photo = Sahl.wrap(c).getString(R.string.photo)
         val out = ArrayList<Conversation>()
+        val emptyThreads = ArrayList<Long>()
         cr.query(Uri.parse("content://mms-sms/conversations?simple=true"),
-            arrayOf("_id", "date", "recipient_ids", "snippet", "has_attachment"), null, null, "date DESC")?.use {
+            arrayOf("_id", "date", "recipient_ids", "snippet", "has_attachment", "message_count"), null, null, "date DESC")?.use {
             while (it.moveToNext()) {
                 val t = it.getLong(0)
+                val count = it.getInt(5)
+                val hasAttach = it.getInt(4) == 1
+                val rawSnippet = it.getString(3) ?: ""
+                if (count <= 0 && rawSnippet.isBlank() && !hasAttach) { emptyThreads.add(t); continue }
                 val members = (it.getString(2) ?: "").split(' ').mapNotNull { id -> id.toLongOrNull()?.let { canon[it] } }
                     .filter { a -> a.isNotBlank() && Norm.phoneKey(a) !in mine }
                 if (members.isEmpty()) continue
-                val snippet = (it.getString(3) ?: "").ifBlank { if (it.getInt(4) == 1) photo else "" }
+                val snippet = rawSnippet.ifBlank { if (hasAttach) photo else "" }
+                if (snippet.isBlank()) continue
                 val addr = if (members.size > 1) members.joinToString(",") else members[0]
-                val (name, ph) = if (members.size > 1) groupName(c, members) to null else Names.of(c, members[0])
+                val (name, ph) = if (members.size > 1) groupName(c, members, lookupContacts) to null
+                                 else if (lookupContacts) Names.of(c, members[0]) else Names.cached(members[0])
                 out.add(Conversation(t, addr, snippet, it.getLong(1), unread[t] ?: 0, false, name, ph,
                     category = if (members.size > 1) Category.PERSONAL else Category.of(members[0], snippet, name != null),
                     pinned = Prefs.pinned(c, t), muted = Prefs.muted(c, t),
                     members = if (members.size > 1) members else emptyList(), photoMsg = snippet == photo))
             }
         }
+        // Clean up empty threads left behind by earlier getOrCreateThreadId lookups
+        if (emptyThreads.isNotEmpty() && isDefault(c)) {
+            for (t in emptyThreads) try { cr.delete(Uri.parse("content://mms-sms/conversations/$t"), null, null) } catch (e: Exception) { }
+        }
         if (out.isEmpty()) throw IllegalStateException("empty")   // fall back to the full scan
         return out.sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.date })
     }
 
     /** Slower fallback: scan recent messages (used only if the fast path isn't available). */
-    private fun slowConversations(c: Context, scan: Int = 5000): List<Conversation> {
+    private fun slowConversations(c: Context, scan: Int = 5000, lookupContacts: Boolean = true): List<Conversation> {
         val latest = LinkedHashMap<Long, Conversation>()
         val unread = HashMap<Long, Int>()
         c.contentResolver.query(Telephony.Sms.CONTENT_URI,
@@ -156,15 +191,16 @@ object Sms {
             unread[t] = (unread[t] ?: 0) + (Mms.unreadCache[t] ?: 0)
         }
         return latest.values.map { cv ->
-            val (name, ph) = if (cv.group) groupName(c, cv.members) to null else Names.of(c, cv.address)
+            val (name, ph) = if (cv.group) groupName(c, cv.members, lookupContacts) to null
+                             else if (lookupContacts) Names.of(c, cv.address) else Names.cached(cv.address)
             cv.copy(unread = unread[cv.threadId] ?: 0, name = name, photo = ph,
                 category = if (cv.group) Category.PERSONAL else Category.of(cv.address, cv.snippet, name != null),
                 pinned = Prefs.pinned(c, cv.threadId), muted = Prefs.muted(c, cv.threadId))
         }.sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.date })
     }
 
-    fun groupName(c: Context, members: List<String>) =
-        members.take(4).joinToString(", ") { (Names.of(c, it).first ?: it).substringBefore(' ') } + if (members.size > 4) " +${members.size - 4}" else ""
+    fun groupName(c: Context, members: List<String>, lookupContacts: Boolean = true) =
+        members.take(4).joinToString(", ") { ((if (lookupContacts) Names.of(c, it) else Names.cached(it)).first ?: it).substringBefore(' ') } + if (members.size > 4) " +${members.size - 4}" else ""
 
     fun messages(c: Context, threadId: Long, limit: Int = 500): List<Msg> {
         val out = ArrayList<Msg>()
@@ -178,6 +214,33 @@ object Sms {
     }
 
     fun threadFor(c: Context, address: String): Long = try { Telephony.Threads.getOrCreateThreadId(c, address) } catch (e: Exception) { 0L }
+
+    /** Finds an existing thread ID for a phone number without creating an empty thread row in Android's database. */
+    fun existingThreadFor(c: Context, address: String): Long {
+        val key = Norm.phoneKey(address)
+        if (key.isEmpty()) return 0L
+        try {
+            val ids = ArrayList<Long>()
+            c.contentResolver.query(Uri.parse("content://mms-sms/canonical-addresses"), null, null, null, null)?.use {
+                val i = it.getColumnIndex("_id"); val a = it.getColumnIndex("address")
+                while (it.moveToNext()) {
+                    val addr = it.getString(a) ?: ""
+                    if (addr == address || (key.length >= 7 && Norm.phoneKey(addr) == key)) ids.add(it.getLong(i))
+                }
+            }
+            if (ids.isEmpty()) return 0L
+            c.contentResolver.query(Uri.parse("content://mms-sms/conversations?simple=true"),
+                arrayOf("_id", "recipient_ids", "message_count"), null, null, "date DESC")?.use {
+                while (it.moveToNext()) {
+                    if (it.getInt(2) <= 0) continue
+                    val rec = (it.getString(1) ?: "").trim()
+                    val rId = rec.toLongOrNull()
+                    if (rId != null && rId in ids) return it.getLong(0)
+                }
+            }
+        } catch (e: Exception) { }
+        return 0L
+    }
 
     fun markRead(c: Context, threadId: Long) {
         if (!isDefault(c)) return
@@ -347,6 +410,27 @@ object Notify {
         val lines = (prev.split('\u0001').filter { it.isNotEmpty() } + body).takeLast(5)
         Sahl.prefs(c).edit().putString("n_$id", lines.joinToString("\u0001"))
             .putString("na_$id", address).putString("ng_$id", groupName ?: "").apply()
+        // Update the cached conversation list so opening Sahl Messages shows the new message instantly
+        try {
+            val cached = Sms.readCache(c).toMutableList()
+            if (cached.isNotEmpty()) {
+                val idx = cached.indexOfFirst { it.threadId == thread }
+                val now = System.currentTimeMillis()
+                val updated = if (idx >= 0) {
+                    val cur = cached.removeAt(idx)
+                    cur.copy(snippet = body, date = now, unread = cur.unread + 1, outgoing = false,
+                        category = if (cur.group) Category.PERSONAL else Category.of(address, body, cur.name != null))
+                } else {
+                    val (name, ph) = Names.of(c, address)
+                    Conversation(thread, address, body, now, 1, false, groupName ?: name, ph,
+                        category = if (groupName != null) Category.PERSONAL else Category.of(address, body, name != null),
+                        pinned = Prefs.pinned(c, thread), muted = Prefs.muted(c, thread))
+                }
+                val insertAt = if (updated.pinned) 0 else cached.indexOfFirst { !it.pinned }.let { if (it < 0) cached.size else it }
+                cached.add(insertAt, updated)
+                Sms.saveCache(c, cached)
+            }
+        } catch (e: Exception) { }
         post(c, thread, false)
     }
 
