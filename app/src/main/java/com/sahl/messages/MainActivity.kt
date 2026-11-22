@@ -36,6 +36,7 @@ class MainActivity : SahlActivity() {
     private lateinit var empty: LinearLayout
     private lateinit var chips: LinearLayout
     private var shown: List<Conversation> = emptyList()
+    private val adapter = Adapter()
 
     private val perms = arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS,
         Manifest.permission.READ_CONTACTS, Manifest.permission.READ_PHONE_STATE)
@@ -66,6 +67,7 @@ class MainActivity : SahlActivity() {
         val body = FrameLayout(this)
         list = ListView(this).apply {
             divider = null; selector = android.graphics.drawable.ColorDrawable(0); clipToPadding = false; setPadding(0, 0, 0, px(96))
+            adapter = this@MainActivity.adapter
         }
         body.addView(list, FrameLayout.LayoutParams(-1, -1))
         empty = LinearLayout(this).apply {
@@ -241,7 +243,7 @@ class MainActivity : SahlActivity() {
             val extra = deepSearch(query).filter { t -> shown.none { it.threadId == t } }
             if (extra.isNotEmpty()) shown = shown + all.filter { it.threadId in extra }
         }
-        list.adapter = Adapter()
+        adapter.notifyDataSetChanged()
         empty.visibility = if (shown.isEmpty() && granted()) View.VISIBLE else View.GONE
     }
 
@@ -253,14 +255,24 @@ class MainActivity : SahlActivity() {
         out
     } catch (e: Exception) { emptySet() }
 
+    private fun markReadLocally(threadId: Long) {
+        var changed = false
+        all = all.map { if (it.threadId == threadId && it.unread > 0) { changed = true; it.copy(unread = 0) } else it }
+        if (changed) { renderChips(); filter(); saveCache(all) }
+    }
+
     private fun open(cv: Conversation) {
+        if (cv.unread > 0 && Sms.isDefault(this)) markReadLocally(cv.threadId)
         startActivity(Intent(this, ThreadActivity::class.java).putExtra("thread", cv.threadId)
             .putExtra("address", if (cv.group) cv.members.joinToString(",") else cv.address))
     }
 
     private fun actions(cv: Conversation) {
         val items = mutableListOf<Triple<Int, String, () -> Unit>>(
-            Triple(R.drawable.ic_check, getString(R.string.mark_read)) { Thread { Sms.markRead(this, cv.threadId) }.start() },
+            Triple(R.drawable.ic_check, getString(R.string.mark_read)) {
+                if (Sms.isDefault(this)) markReadLocally(cv.threadId)
+                Thread { Sms.markRead(this, cv.threadId) }.start()
+            },
             Triple(R.drawable.ic_call, getString(R.string.call)) { Sahl.callVia(this, cv.address) },
             Triple(R.drawable.ic_star, getString(if (cv.pinned) R.string.unpin else R.string.pin)) { Prefs.togglePin(this, cv.threadId); load() },
             Triple(R.drawable.ic_bell, getString(if (cv.muted) R.string.unmute else R.string.mute)) { Prefs.toggleMute(this, cv.threadId); load() },
@@ -290,6 +302,7 @@ class MainActivity : SahlActivity() {
         override fun getCount() = shown.size
         override fun getItem(p: Int) = shown[p]
         override fun getItemId(p: Int) = shown[p].threadId
+        override fun hasStableIds() = true
         override fun getView(p: Int, cv: View?, parent: ViewGroup): View {
             val c = shown[p]
             val title = c.name ?: c.address
@@ -333,7 +346,10 @@ class MainActivity : SahlActivity() {
             row.addView(t, LinearLayout.LayoutParams(0, -2, 1f))
             return SwipeRow(this@MainActivity, row, col(R.color.bg),
                 R.drawable.ic_call, col(R.color.ok), { Sahl.callVia(this@MainActivity, c.address) },
-                R.drawable.ic_check, col(R.color.emerald), { Thread { Sms.markRead(this@MainActivity, c.threadId) }.start() })
+                R.drawable.ic_check, col(R.color.emerald), {
+                    if (Sms.isDefault(this@MainActivity)) markReadLocally(c.threadId)
+                    Thread { Sms.markRead(this@MainActivity, c.threadId) }.start()
+                })
         }
     }
 }
