@@ -23,7 +23,7 @@ class UnionProvider : ContentProvider() {
         val number = uri.pathSegments.getOrNull(1) ?: return out
         val limit = uri.getQueryParameter("limit")?.toIntOrNull()?.coerceIn(1, 200) ?: 30
         return try {
-            val thread = Sms.threadFor(c, number)
+            val thread = Sms.existingThreadFor(c, number)
             if (thread > 0) c.contentResolver.query(Telephony.Sms.CONTENT_URI, arrayOf(Telephony.Sms.DATE, Telephony.Sms.TYPE, Telephony.Sms.BODY),
                 "${Telephony.Sms.THREAD_ID}=?", arrayOf(thread.toString()), Telephony.Sms.DATE + " DESC")?.use {
                 while (it.moveToNext() && out.count < limit)
