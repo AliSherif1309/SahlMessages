@@ -394,11 +394,13 @@ object Guard {
 object Notify {
     const val KEY_REPLY = "reply"
     private const val CH = "messages_chime"   // plays the Sahl chime
+    private const val CH_SILENT = "messages_silent"
 
     private fun channel(c: Context) {
         val w = Sahl.wrap(c)
         val nm = c.getSystemService(NotificationManager::class.java) ?: return
         nm.createNotificationChannel(Sahl.chimeChannel(c, CH, w.getString(R.string.messages_channel)))
+        nm.createNotificationChannel(android.app.NotificationChannel(CH_SILENT, w.getString(R.string.messages_channel), NotificationManager.IMPORTANCE_LOW))
         try { nm.deleteNotificationChannel("messages") } catch (e: Exception) { }
     }
 
@@ -466,11 +468,11 @@ object Notify {
                 PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .addRemoteInput(RemoteInput.Builder(KEY_REPLY).setLabel(w.getString(R.string.reply)).build()).build()
         val warn = if (groupName == null && !hidden) Assist.warning(c, address, body, Names.of(c, address).first != null) else null
-        val b = Notification.Builder(c, CH).setSmallIcon(R.drawable.ic_chat).setStyle(style)
+        val ch = if (PrayerSilence.inPrayer(c)) CH_SILENT else CH
+        val b = Notification.Builder(c, ch).setSmallIcon(R.drawable.ic_chat).setStyle(style)
             .apply { if (warn != null) setSubText("⚠ " + warn) }
             .setContentIntent(open).setAutoCancel(true).setCategory(Notification.CATEGORY_MESSAGE)
             .setOnlyAlertOnce(reveal)
-            .setSilent(PrayerSilence.inPrayer(c))
             .setVisibility(if (hidden) Notification.VISIBILITY_PRIVATE else Notification.VISIBILITY_PRIVATE)
         // Hidden: "Show" comes first, then the usual quick buttons
         if (hidden) b.addAction(action(w.getString(R.string.show), 3, "show"))
