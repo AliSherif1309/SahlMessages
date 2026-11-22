@@ -158,10 +158,10 @@ class ThreadActivity : SahlActivity() {
     private fun load() {
         if (thread == 0L) return
         Thread {
+            Sms.markRead(this, thread); Notify.clear(this, thread)
             val sms = try { Sms.messages(this, thread) } catch (e: Exception) { emptyList() }
             val mms = try { Mms.inThread(this, thread) } catch (e: Exception) { emptyList() }
             val all: List<Any> = (sms + mms).sortedBy { if (it is Msg) it.date else (it as MmsMsg).date }
-            Sms.markRead(this, thread); Notify.clear(this, thread)
             val lastIn = sms.lastOrNull { !it.outgoing }
             val known = group || Names.of(this, address).first != null
             val warn = if (lastIn != null && !group) Assist.warning(this, address, lastIn.body, known) else null
