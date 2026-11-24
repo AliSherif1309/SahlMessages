@@ -27,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap
 data class Conversation(val threadId: Long, val address: String, val snippet: String, val date: Long,
                         val unread: Int, val outgoing: Boolean, val name: String?, val photo: String?,
                         val category: Int = Category.PERSONAL, val pinned: Boolean = false, val muted: Boolean = false,
-                        val members: List<String> = emptyList(), val photoMsg: Boolean = false) {
+                        val members: List<String> = emptyList(), val photoMsg: Boolean = false, val saved: Boolean = true) {
     val group get() = members.size > 1
 }
 
@@ -40,33 +40,42 @@ data class Msg(val id: Long, val body: String, val date: Long, val type: Int, va
 
 data class Sim(val subId: Int, val label: String)
 
-/** Names come from Sahl Contacts (Sahl Union) or Android contacts. */
+/** Names come from Sahl Contacts (Sahl Union), Android contacts, or Sahl Phone's fetched caller names. */
 object Names {
-    private val cache = ConcurrentHashMap<String, Pair<String?, String?>>()
-    fun cached(number: String): Pair<String?, String?> = if (number.isBlank()) null to null else cache[number] ?: (null to null)
+    data class Info(val name: String?, val photo: String?, val saved: Boolean)
+    private val cache = ConcurrentHashMap<String, Info>()
+    fun cachedInfo(number: String): Info = if (number.isBlank()) Info(null, null, false) else cache[number] ?: Info(null, null, false)
+    fun cached(number: String): Pair<String?, String?> = cachedInfo(number).let { it.name to it.photo }
     fun seed(list: List<Conversation>) {
         for (c in list) if (!c.group && c.address.isNotBlank() && c.name != null && !cache.containsKey(c.address)) {
-            cache[c.address] = c.name to c.photo
+            cache[c.address] = Info(c.name, c.photo, c.saved)
         }
     }
-    fun of(c: Context, number: String): Pair<String?, String?> {
-        if (number.isBlank()) return null to null
+    fun info(c: Context, number: String): Info {
+        if (number.isBlank()) return Info(null, null, false)
         cache[number]?.let { return it }
-        var r: Pair<String?, String?> = null to null
+        var r = Info(null, null, false)
         try {
             c.contentResolver.query(Uri.parse(Sahl.CONTACTS_UNION + "/lookup/" + Uri.encode(number)), null, null, null, null)?.use {
-                if (it.moveToFirst()) r = it.getString(0) to it.getString(2)
+                if (it.moveToFirst()) r = Info(it.getString(0), it.getString(2), true)
             }
         } catch (e: Exception) { }
-        if (r.first == null) try {
+        if (r.name == null) try {
             c.contentResolver.query(Uri.withAppendedPath(PhoneLookup.CONTENT_FILTER_URI, Uri.encode(number)),
                 arrayOf(PhoneLookup.DISPLAY_NAME, PhoneLookup.PHOTO_THUMBNAIL_URI), null, null, null)?.use {
-                if (it.moveToFirst()) r = it.getString(0) to it.getString(1)
+                if (it.moveToFirst()) r = Info(it.getString(0), it.getString(1), true)
+            }
+        } catch (e: Exception) { }
+        if (r.name == null) try {
+            c.contentResolver.query(Uri.parse(Sahl.PHONE_UNION + "/fetched/" + Uri.encode(number)), null, null, null, null)?.use {
+                if (it.moveToFirst()) r = Info(it.getString(0)?.takeIf { s -> s.isNotBlank() }, null, it.getInt(1) == 1)
             }
         } catch (e: Exception) { }
         cache[number] = r
         return r
     }
+
+    fun of(c: Context, number: String): Pair<String?, String?> = info(c, number).let { it.name to it.photo }
     fun clear() = cache.clear()
 }
 
@@ -142,12 +151,14 @@ object Sms {
                 val snippet = rawSnippet.ifBlank { if (hasAttach) photo else "" }
                 if (snippet.isBlank()) continue
                 val addr = if (members.size > 1) members.joinToString(",") else members[0]
-                val (name, ph) = if (members.size > 1) groupName(c, members, lookupContacts) to null
-                                 else if (lookupContacts) Names.of(c, members[0]) else Names.cached(members[0])
+                val info = if (members.size > 1) null else if (lookupContacts) Names.info(c, members[0]) else Names.cachedInfo(members[0])
+                val name = if (members.size > 1) groupName(c, members, lookupContacts) else info?.name
+                val ph = info?.photo
+                val saved = members.size > 1 || (info?.saved == true)
                 out.add(Conversation(t, addr, snippet, it.getLong(1), unread[t] ?: 0, false, name, ph,
-                    category = if (members.size > 1) Category.PERSONAL else Category.of(members[0], snippet, name != null),
+                    category = if (members.size > 1) Category.PERSONAL else Category.of(members[0], snippet, saved),
                     pinned = Prefs.pinned(c, t), muted = Prefs.muted(c, t),
-                    members = if (members.size > 1) members else emptyList(), photoMsg = snippet == photo))
+                    members = if (members.size > 1) members else emptyList(), photoMsg = snippet == photo, saved = saved))
             }
         }
         // Clean up empty threads left behind by earlier getOrCreateThreadId lookups

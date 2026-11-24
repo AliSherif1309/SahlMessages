@@ -53,15 +53,18 @@ class ThreadActivity : SahlActivity() {
         thread = intent.getLongExtra("thread", 0L)
         members = address.split(',').map { it.trim() }.filter { it.isNotEmpty() }
         if (thread == 0L && address.isNotBlank()) thread = if (group) try { Telephony.Threads.getOrCreateThreadId(this, members.toSet()) } catch (e: Exception) { 0L } else Sms.existingThreadFor(this, address)
-        val name = if (group) Sms.groupName(this, members) else Names.of(this, address).first
+        val info = if (group) null else Names.info(this, address)
+        val name = if (group) Sms.groupName(this, members) else info?.name
+        val saved = group || (info?.saved == true)
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(col(R.color.bg)) }
         root.addView(header(name ?: address, true, listOf(
             R.drawable.ic_call to { Sahl.callVia(this, address) },
             R.drawable.ic_more to { menu() }
         ), large = false))
         if (group) root.addView(text(getString(R.string.group_of, members.size), 12f, col(R.color.sub)).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, px(4)) })
-        else if (name != null || address.any { it.isLetter() }) Unit
-        else root.addView(text(listOfNotNull(getString(R.string.not_in_contacts), Countries.of(address, Sahl.countryCode(this), rtl)).joinToString("  ·  "),
+        else if (saved || address.any { it.isLetter() }) Unit
+        else root.addView(text(listOfNotNull(if (name != null) address else null, getString(R.string.not_in_contacts),
+            Countries.of(address, Sahl.countryCode(this), rtl)).joinToString("  ·  "),
             12f, col(R.color.sub)).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, px(4)) })
 
         warnBox = text("", 13f, 0xFFFFFFFF.toInt()).apply {
@@ -268,11 +271,13 @@ class ThreadActivity : SahlActivity() {
     private fun clearImage() { image = null; attachBox.removeAllViews(); attachBox.visibility = View.GONE }
 
     private fun menu() {
-        sheet(if (group) Sms.groupName(this, members) else Names.of(this, address).first ?: address, listOf(
+        val info = if (group) null else Names.info(this, address)
+        sheet(if (group) Sms.groupName(this, members) else info?.name ?: address, listOf(
             Triple(R.drawable.ic_call, getString(R.string.call)) { Sahl.callVia(this, address) },
             Triple(R.drawable.ic_person_add, getString(R.string.add_contact)) {
                 val i = Intent(Intent.ACTION_INSERT).setType(android.provider.ContactsContract.Contacts.CONTENT_TYPE)
                     .putExtra(android.provider.ContactsContract.Intents.Insert.PHONE, address)
+                if (info?.name != null && !info.saved) i.putExtra(android.provider.ContactsContract.Intents.Insert.NAME, info.name)
                 try { packageManager.getPackageInfo("com.sahl.contacts", 0); i.setPackage("com.sahl.contacts") } catch (e: Exception) { }
                 try { startActivity(i) } catch (e: Exception) { }
             },
