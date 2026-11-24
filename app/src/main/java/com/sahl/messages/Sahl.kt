@@ -83,10 +83,13 @@ object Sahl {
     /** The Sahl chime — the shared notification sound of every Sahl app (res/raw/sahl_chime). */
     fun chime(c: Context): Uri = Uri.parse("android.resource://${c.packageName}/raw/sahl_chime")
 
-    /** A notification channel that plays the Sahl chime. */
-    fun chimeChannel(c: Context, id: String, name: String, importance: Int = android.app.NotificationManager.IMPORTANCE_HIGH) =
+    /** Unique notification sound for Sahl Messages (res/raw/sahl_messages_chime). */
+    fun messageChime(c: Context): Uri = Uri.parse("android.resource://${c.packageName}/raw/sahl_messages_chime")
+
+    /** A notification channel that plays a Sahl chime. */
+    fun chimeChannel(c: Context, id: String, name: String, importance: Int = android.app.NotificationManager.IMPORTANCE_HIGH, sound: Uri = chime(c)) =
         android.app.NotificationChannel(id, name, importance).apply {
-            setSound(chime(c), android.media.AudioAttributes.Builder()
+            setSound(sound, android.media.AudioAttributes.Builder()
                 .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
                 .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
             enableVibration(true)

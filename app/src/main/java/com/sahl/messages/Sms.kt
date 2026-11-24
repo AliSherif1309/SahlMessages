@@ -404,15 +404,15 @@ object Guard {
 /** Message notifications with reply, mark-read and copy-code. */
 object Notify {
     const val KEY_REPLY = "reply"
-    private const val CH = "messages_chime"   // plays the Sahl chime
+    private const val CH = "messages_tone"    // plays the unique Sahl Messages chime
     private const val CH_SILENT = "messages_silent"
 
     private fun channel(c: Context) {
         val w = Sahl.wrap(c)
         val nm = c.getSystemService(NotificationManager::class.java) ?: return
-        nm.createNotificationChannel(Sahl.chimeChannel(c, CH, w.getString(R.string.messages_channel)))
+        nm.createNotificationChannel(Sahl.chimeChannel(c, CH, w.getString(R.string.messages_channel), sound = Sahl.messageChime(c)))
         nm.createNotificationChannel(android.app.NotificationChannel(CH_SILENT, w.getString(R.string.messages_channel), NotificationManager.IMPORTANCE_LOW))
-        try { nm.deleteNotificationChannel("messages") } catch (e: Exception) { }
+        try { nm.deleteNotificationChannel("messages"); nm.deleteNotificationChannel("messages_chime") } catch (e: Exception) { }
     }
 
     fun message(c: Context, address: String, body: String, threadId: Long = -1L, groupName: String? = null) {
