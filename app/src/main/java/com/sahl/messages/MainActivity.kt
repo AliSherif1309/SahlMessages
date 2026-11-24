@@ -320,6 +320,10 @@ class MainActivity : SahlActivity() {
             val bold = c.unread > 0
             top.addView(text(title, 16f, col(R.color.text), bold).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END },
                 LinearLayout.LayoutParams(0, -2, 1f))
+            if (c.name != null && !c.saved) top.addView(text(getString(R.string.not_in_contacts), 11f, col(R.color.sub)).apply {
+                (layoutParams as? LinearLayout.LayoutParams)?.marginEnd = px(6)
+                setPaddingRelative(0, 0, px(6), 0)
+            })
             if (c.pinned) top.addView(icon(R.drawable.ic_star, col(R.color.gold), 14).apply { (layoutParams as LinearLayout.LayoutParams).marginEnd = px(4) })
             if (c.muted) top.addView(icon(R.drawable.ic_bell, col(R.color.sub), 14).apply { alpha = 0.5f; (layoutParams as LinearLayout.LayoutParams).marginEnd = px(4) })
             top.addView(text(stamp(c.date), 12f, if (bold) col(R.color.emerald) else col(R.color.sub), bold))
