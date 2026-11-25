@@ -20,7 +20,7 @@ import java.io.File
 
 /** One picture/group message. */
 data class MmsMsg(val id: Long, val threadId: Long, val date: Long, val box: Int, val read: Boolean,
-                  val text: String, val images: List<Long>, val from: String?, val addresses: List<String>) {
+                  val text: String, val images: List<Long>, val from: String?, val addresses: List<String>, val subId: Int = -1) {
     val outgoing get() = box != Telephony.Mms.MESSAGE_BOX_INBOX
 }
 
@@ -233,7 +233,7 @@ object Mms {
         }
         val who = if (members.size > 1) Names.of(c, from).first ?: from else from
         if (!Guard.blocked(c, from) && !Prefs.muted(c, thread))
-            Notify.message(c, from, if (text.isNotBlank()) text else Sahl.wrap(c).getString(R.string.photo), thread, if (members.size > 1) who else null)
+            Notify.message(c, from, if (text.isNotBlank()) text else Sahl.wrap(c).getString(R.string.photo), thread, if (members.size > 1) who else null, subId = sub)
     }
 
     @SuppressLint("HardwareIds")
@@ -330,14 +330,14 @@ object Mms {
     fun inThread(c: Context, thread: Long, limit: Int = 200): List<MmsMsg> {
         val out = ArrayList<MmsMsg>()
         try {
-            c.contentResolver.query(Telephony.Mms.CONTENT_URI, arrayOf("_id", "date", "msg_box", "read"),
+            c.contentResolver.query(Telephony.Mms.CONTENT_URI, arrayOf("_id", "date", "msg_box", "read", "sub_id"),
                 "thread_id=?", arrayOf(thread.toString()), "date DESC")?.use {
                 while (it.moveToNext() && out.size < limit) {
                     val id = it.getLong(0)
                     val (t, imgs) = text(c, id)
                     val (from, all0) = addresses(c, id)
                     val mine = Sms.myNumbers(c); val all = all0.filter { Norm.phoneKey(it) !in mine }
-                    out.add(MmsMsg(id, thread, it.getLong(1) * 1000, it.getInt(2), it.getInt(3) == 1, t, imgs, from, all))
+                    out.add(MmsMsg(id, thread, it.getLong(1) * 1000, it.getInt(2), it.getInt(3) == 1, t, imgs, from, all, it.getInt(4)))
                 }
             }
         } catch (e: Exception) { }
@@ -349,7 +349,7 @@ object Mms {
         val out = LinkedHashMap<Long, MmsMsg>()
         val unread = HashMap<Long, Int>()
         try {
-            c.contentResolver.query(Telephony.Mms.CONTENT_URI, arrayOf("_id", "thread_id", "date", "msg_box", "read"), null, null, "date DESC")?.use {
+            c.contentResolver.query(Telephony.Mms.CONTENT_URI, arrayOf("_id", "thread_id", "date", "msg_box", "read", "sub_id"), null, null, "date DESC")?.use {
                 var n = 0
                 while (it.moveToNext() && n++ < scan) {
                     val t = it.getLong(1)
@@ -358,7 +358,7 @@ object Mms {
                     val id = it.getLong(0)
                     val (txt, imgs) = text(c, id)
                     val (from, all) = addresses(c, id)
-                    out[t] = MmsMsg(id, t, it.getLong(2) * 1000, it.getInt(3), it.getInt(4) == 1, txt, imgs, from, all)
+                    out[t] = MmsMsg(id, t, it.getLong(2) * 1000, it.getInt(3), it.getInt(4) == 1, txt, imgs, from, all, it.getInt(5))
                 }
             }
         } catch (e: Exception) { }

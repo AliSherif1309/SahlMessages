@@ -348,6 +348,7 @@ class ThreadActivity : SahlActivity() {
         }
     }
     private fun time(t: Long) = Instant.ofEpochMilli(t).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm", loc()))
+    private fun simLabel(sub: Int) = if (sims.size > 1 && sub >= 0) sims.firstOrNull { it.subId == sub }?.label else null
 
     private fun dateOf(o: Any) = if (o is Msg) o.date else (o as MmsMsg).date
 
@@ -384,7 +385,7 @@ class ThreadActivity : SahlActivity() {
         if (m.text.isNotBlank()) bubble.addView(text(m.text, 16f, fg).apply {
             autoLinkMask = Linkify.WEB_URLS or Linkify.PHONE_NUMBERS; setPadding(px(8), px(4), px(8), 0) })
         val status = when (m.box) { Telephony.Mms.MESSAGE_BOX_FAILED -> getString(R.string.failed_tap); Telephony.Mms.MESSAGE_BOX_OUTBOX -> getString(R.string.sending); else -> "" }
-        bubble.addView(text(listOf(time(m.date), status).filter { it.isNotEmpty() }.joinToString(" · "), 11f,
+        bubble.addView(text(listOfNotNull(time(m.date), simLabel(m.subId), status.ifEmpty { null }).joinToString(" · "), 11f,
             if (mine) 0xCCFFFFFF.toInt() else col(R.color.sub)).apply { gravity = Gravity.END; setPadding(px(8), px(3), px(8), px(2)) },
             LinearLayout.LayoutParams(-1, -2))
         val holder = LinearLayout(this).apply { gravity = if (mine) Gravity.END else Gravity.START }
@@ -429,7 +430,7 @@ class ThreadActivity : SahlActivity() {
             val status = when { m.failed -> getString(R.string.failed_tap); m.pending -> getString(R.string.sending)
                 mine && m.delivered -> "✓✓"; mine -> "✓"; else -> "" }
             val star = if (Stars.isStarred(this@ThreadActivity, "s:" + m.id)) "★ " else ""
-            bubble.addView(text(star + listOf(time(m.date), status).filter { it.isNotEmpty() }.joinToString(" · "), 11f,
+            bubble.addView(text(star + listOfNotNull(time(m.date), simLabel(m.subId), status.ifEmpty { null }).joinToString(" · "), 11f,
                 if (mine || m.failed) 0xCCFFFFFF.toInt() else col(R.color.sub)).apply { gravity = Gravity.END; setPadding(0, px(3), 0, 0) },
                 LinearLayout.LayoutParams(-1, -2))
             if (m.failed) bubble.setOnClickListener { msgActions(m) }
