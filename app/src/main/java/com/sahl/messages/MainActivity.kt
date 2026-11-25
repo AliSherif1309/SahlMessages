@@ -37,6 +37,7 @@ class MainActivity : SahlActivity() {
     private lateinit var chips: LinearLayout
     private var shown: List<Conversation> = emptyList()
     private val adapter = Adapter()
+    private var simLabels: Map<Int, String> = emptyMap()
 
     private val perms = arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS,
         Manifest.permission.READ_CONTACTS, Manifest.permission.READ_PHONE_STATE)
@@ -89,6 +90,8 @@ class MainActivity : SahlActivity() {
         super.onResume()
         renderBanner(); renderChips(); renderDates()
         if (granted()) {
+            val s = Sms.sims(this)
+            simLabels = if (s.size > 1) s.associate { it.subId to it.label } else emptyMap()
             if (!observing) { contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, observer); observing = true }
             load()
         }
@@ -326,6 +329,11 @@ class MainActivity : SahlActivity() {
             })
             if (c.pinned) top.addView(icon(R.drawable.ic_star, col(R.color.gold), 14).apply { (layoutParams as LinearLayout.LayoutParams).marginEnd = px(4) })
             if (c.muted) top.addView(icon(R.drawable.ic_bell, col(R.color.sub), 14).apply { alpha = 0.5f; (layoutParams as LinearLayout.LayoutParams).marginEnd = px(4) })
+            simLabels[c.subId]?.let { sim ->
+                top.addView(text(sim, 10f, col(R.color.sub), true).apply {
+                    background = round(col(R.color.tonal), 8f); setPadding(px(6), px(1), px(6), px(1))
+                }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = px(6) })
+            }
             top.addView(text(stamp(c.date), 12f, if (bold) col(R.color.emerald) else col(R.color.sub), bold))
             t.addView(top)
             val bottom = LinearLayout(this@MainActivity).apply { gravity = Gravity.CENTER_VERTICAL }

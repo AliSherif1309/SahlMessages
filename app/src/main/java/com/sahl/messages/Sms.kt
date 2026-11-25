@@ -27,7 +27,8 @@ import java.util.concurrent.ConcurrentHashMap
 data class Conversation(val threadId: Long, val address: String, val snippet: String, val date: Long,
                         val unread: Int, val outgoing: Boolean, val name: String?, val photo: String?,
                         val category: Int = Category.PERSONAL, val pinned: Boolean = false, val muted: Boolean = false,
-                        val members: List<String> = emptyList(), val photoMsg: Boolean = false, val saved: Boolean = true) {
+                        val members: List<String> = emptyList(), val photoMsg: Boolean = false, val saved: Boolean = true,
+                        val subId: Int = -1) {
     val group get() = members.size > 1
 }
 
@@ -95,7 +96,7 @@ object Sms {
         val a = org.json.JSONArray()
         for (cv in l.take(60)) a.put(org.json.JSONObject().put("t", cv.threadId).put("a", cv.address).put("s", cv.snippet).put("d", cv.date)
             .put("u", cv.unread).put("n", cv.name ?: "").put("p", cv.photo ?: "").put("c", cv.category).put("pin", cv.pinned).put("m", cv.muted)
-            .put("g", org.json.JSONArray(cv.members)))
+            .put("g", org.json.JSONArray(cv.members)).put("sub", cv.subId))
         Sahl.prefs(c).edit().putString("list_cache", a.toString()).apply()
     }
 
@@ -104,7 +105,8 @@ object Sms {
         (0 until a.length()).map { a.getJSONObject(it) }.filter { it.optString("s", "").isNotBlank() }.map { o ->
             val g = o.optJSONArray("g"); val members = if (g == null) emptyList() else (0 until g.length()).map { g.getString(it) }
             Conversation(o.getLong("t"), o.getString("a"), o.getString("s"), o.getLong("d"), o.getInt("u"), false,
-                o.getString("n").ifEmpty { null }, o.getString("p").ifEmpty { null }, o.getInt("c"), o.getBoolean("pin"), o.getBoolean("m"), members)
+                o.getString("n").ifEmpty { null }, o.getString("p").ifEmpty { null }, o.getInt("c"), o.getBoolean("pin"), o.getBoolean("m"), members,
+                subId = o.optInt("sub", -1))
         }
     } catch (e: Exception) { emptyList() }
 
@@ -133,6 +135,22 @@ object Sms {
                 while (it.moveToNext()) { val t = it.getLong(0); unread[t] = (unread[t] ?: 0) + 1 }
             }
         } catch (e: Exception) { }
+        val threadSub = HashMap<Long, Int>()
+        if (sims(c).size > 1) {
+            try {
+                cr.query(Telephony.Sms.CONTENT_URI, arrayOf(Telephony.Sms.THREAD_ID, Telephony.Sms.SUBSCRIPTION_ID),
+                    null, null, Telephony.Sms.DATE + " DESC")?.use {
+                    var n = 0
+                    while (it.moveToNext() && n++ < 1500) {
+                        val tid = it.getLong(0)
+                        if (tid !in threadSub) {
+                            val sub = it.getInt(1)
+                            if (sub >= 0) threadSub[tid] = sub
+                        }
+                    }
+                }
+            } catch (e: Exception) { }
+        }
         val mine = myNumbers(c)
         val photo = Sahl.wrap(c).getString(R.string.photo)
         val out = ArrayList<Conversation>()
@@ -158,7 +176,8 @@ object Sms {
                 out.add(Conversation(t, addr, snippet, it.getLong(1), unread[t] ?: 0, false, name, ph,
                     category = if (members.size > 1) Category.PERSONAL else Category.of(members[0], snippet, saved),
                     pinned = Prefs.pinned(c, t), muted = Prefs.muted(c, t),
-                    members = if (members.size > 1) members else emptyList(), photoMsg = snippet == photo, saved = saved))
+                    members = if (members.size > 1) members else emptyList(), photoMsg = snippet == photo, saved = saved,
+                    subId = threadSub[t] ?: -1))
             }
         }
         // Clean up empty threads left behind by earlier getOrCreateThreadId lookups
@@ -174,7 +193,7 @@ object Sms {
         val latest = LinkedHashMap<Long, Conversation>()
         val unread = HashMap<Long, Int>()
         c.contentResolver.query(Telephony.Sms.CONTENT_URI,
-            arrayOf(Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE, Telephony.Sms.READ),
+            arrayOf(Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE, Telephony.Sms.READ, Telephony.Sms.SUBSCRIPTION_ID),
             null, null, Telephony.Sms.DATE + " DESC")?.use {
             var n = 0
             while (it.moveToNext() && n++ < scan) {
@@ -183,7 +202,7 @@ object Sms {
                 if (type == Telephony.Sms.MESSAGE_TYPE_INBOX && it.getInt(5) == 0) unread[t] = (unread[t] ?: 0) + 1
                 if (t !in latest) {
                     val addr = it.getString(1) ?: ""
-                    latest[t] = Conversation(t, addr, it.getString(2) ?: "", it.getLong(3), 0, type != Telephony.Sms.MESSAGE_TYPE_INBOX, null, null)
+                    latest[t] = Conversation(t, addr, it.getString(2) ?: "", it.getLong(3), 0, type != Telephony.Sms.MESSAGE_TYPE_INBOX, null, null, subId = it.getInt(6))
                 }
             }
         }
@@ -197,7 +216,7 @@ object Sms {
             val mmsAddr = m.from ?: members.firstOrNull() ?: ""
             if (cur == null || m.date > cur.date)
                 latest[t] = Conversation(t, if (members.size > 1) members.joinToString(",") else (cur?.address ?: mmsAddr),
-                    m.text.ifBlank { photo }, m.date, 0, m.outgoing, null, null, members = members, photoMsg = m.images.isNotEmpty())
+                    m.text.ifBlank { photo }, m.date, 0, m.outgoing, null, null, members = members, photoMsg = m.images.isNotEmpty(), subId = m.subId)
             else latest[t] = cur.copy(members = if (members.size > 1) members else cur.members)
             unread[t] = (unread[t] ?: 0) + (Mms.unreadCache[t] ?: 0)
         }
@@ -271,9 +290,20 @@ object Sms {
     }
 
     fun sims(c: Context): List<Sim> = try {
-        c.getSystemService(SubscriptionManager::class.java)?.activeSubscriptionInfoList
-            ?.map { Sim(it.subscriptionId, (it.displayName ?: it.carrierName ?: "SIM ${it.simSlotIndex + 1}").toString()) } ?: emptyList()
+        val raw = c.getSystemService(SubscriptionManager::class.java)?.activeSubscriptionInfoList ?: emptyList()
+        val labels = raw.map { (it.displayName ?: it.carrierName ?: "SIM ${it.simSlotIndex + 1}").toString() }
+        raw.mapIndexed { i, it ->
+            val lbl = labels[i]
+            val unique = if (labels.count { x -> x == lbl } > 1) "$lbl ${it.simSlotIndex + 1}" else lbl
+            Sim(it.subscriptionId, unique)
+        }
     } catch (e: Exception) { emptyList() }
+
+    fun simLabel(c: Context, subId: Int): String? {
+        if (subId < 0) return null
+        val list = sims(c)
+        return if (list.size > 1) list.firstOrNull { it.subId == subId }?.label else null
+    }
 
     fun defaultSub() = SmsManager.getDefaultSmsSubscriptionId()
 
@@ -362,7 +392,7 @@ class SmsDeliverReceiver : BroadcastReceiver() {
                     put(Telephony.Sms.READ, 0); put(Telephony.Sms.SEEN, 0)
                     if (sub >= 0) put(Telephony.Sms.SUBSCRIPTION_ID, sub)
                 })
-                if (!Guard.blocked(c, address) && !Prefs.muted(c, Sms.threadFor(c, address))) Notify.message(c, address, body)
+                if (!Guard.blocked(c, address) && !Prefs.muted(c, Sms.threadFor(c, address))) Notify.message(c, address, body, subId = sub)
             } catch (e: Exception) { } finally { pending.finish() }
         }.start()
     }
@@ -415,14 +445,14 @@ object Notify {
         try { nm.deleteNotificationChannel("messages"); nm.deleteNotificationChannel("messages_chime") } catch (e: Exception) { }
     }
 
-    fun message(c: Context, address: String, body: String, threadId: Long = -1L, groupName: String? = null) {
+    fun message(c: Context, address: String, body: String, threadId: Long = -1L, groupName: String? = null, subId: Int = -1) {
         val thread = if (threadId > 0) threadId else Sms.threadFor(c, address)
         val id = thread.toInt()
         // Keep the last few lines of this conversation in the notification
         val prev = Sahl.prefs(c).getString("n_$id", "") ?: ""
         val lines = (prev.split('\u0001').filter { it.isNotEmpty() } + body).takeLast(5)
         Sahl.prefs(c).edit().putString("n_$id", lines.joinToString("\u0001"))
-            .putString("na_$id", address).putString("ng_$id", groupName ?: "").apply()
+            .putString("na_$id", address).putString("ng_$id", groupName ?: "").putInt("ns_$id", subId).apply()
         // Update the cached conversation list so opening Sahl Messages shows the new message instantly
         try {
             val cached = Sms.readCache(c).toMutableList()
@@ -432,12 +462,13 @@ object Notify {
                 val updated = if (idx >= 0) {
                     val cur = cached.removeAt(idx)
                     cur.copy(snippet = body, date = now, unread = cur.unread + 1, outgoing = false,
-                        category = if (cur.group) Category.PERSONAL else Category.of(address, body, cur.name != null))
+                        category = if (cur.group) Category.PERSONAL else Category.of(address, body, cur.name != null),
+                        subId = if (subId >= 0) subId else cur.subId)
                 } else {
                     val (name, ph) = Names.of(c, address)
                     Conversation(thread, address, body, now, 1, false, groupName ?: name, ph,
                         category = if (groupName != null) Category.PERSONAL else Category.of(address, body, name != null),
-                        pinned = Prefs.pinned(c, thread), muted = Prefs.muted(c, thread))
+                        pinned = Prefs.pinned(c, thread), muted = Prefs.muted(c, thread), subId = subId)
                 }
                 val insertAt = if (updated.pinned) 0 else cached.indexOfFirst { !it.pinned }.let { if (it < 0) cached.size else it }
                 cached.add(insertAt, updated)
@@ -457,6 +488,7 @@ object Notify {
         val p = Sahl.prefs(c)
         val address = p.getString("na_$id", "") ?: ""
         val groupName = (p.getString("ng_$id", "") ?: "").ifEmpty { null }
+        val subId = p.getInt("ns_$id", -1)
         val lines = (p.getString("n_$id", "") ?: "").split('\u0001').filter { it.isNotEmpty() }
         if (lines.isEmpty() || address.isEmpty()) return
         val body = lines.last()
@@ -478,10 +510,12 @@ object Notify {
             PendingIntent.getBroadcast(c, id, Intent(c, ActionReceiver::class.java).setAction("reply").putExtra("address", address).putExtra("thread", thread),
                 PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .addRemoteInput(RemoteInput.Builder(KEY_REPLY).setLabel(w.getString(R.string.reply)).build()).build()
+        val sim = Sms.simLabel(c, subId)
         val warn = if (groupName == null && !hidden) Assist.warning(c, address, body, Names.of(c, address).first != null) else null
+        val subText = listOfNotNull(sim, warn?.let { "⚠ $it" }).joinToString(" · ").ifEmpty { null }
         val ch = if (PrayerSilence.inPrayer(c)) CH_SILENT else CH
         val b = Notification.Builder(c, ch).setSmallIcon(R.drawable.ic_chat).setStyle(style)
-            .apply { if (warn != null) setSubText("⚠ " + warn) }
+            .apply { if (subText != null) setSubText(subText) }
             .setContentIntent(open).setAutoCancel(true).setCategory(Notification.CATEGORY_MESSAGE)
             .setOnlyAlertOnce(reveal)
             .setVisibility(if (hidden) Notification.VISIBILITY_PRIVATE else Notification.VISIBILITY_PRIVATE)
