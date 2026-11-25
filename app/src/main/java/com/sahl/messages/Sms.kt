@@ -514,7 +514,7 @@ object Notify {
         val warn = if (groupName == null && !hidden) Assist.warning(c, address, body, Names.of(c, address).first != null) else null
         val subText = listOfNotNull(sim, warn?.let { "⚠ $it" }).joinToString(" · ").ifEmpty { null }
         val ch = if (PrayerSilence.inPrayer(c)) CH_SILENT else CH
-        val b = Notification.Builder(c, ch).setSmallIcon(R.drawable.ic_chat).setStyle(style)
+        val b = SahlNotif.apply(c, Notification.Builder(c, ch)).setStyle(style)
             .apply { if (subText != null) setSubText(subText) }
             .setContentIntent(open).setAutoCancel(true).setCategory(Notification.CATEGORY_MESSAGE)
             .setOnlyAlertOnce(reveal)
@@ -554,7 +554,7 @@ object Notify {
 
     fun simple(c: Context, title: String, text: String) {
         channel(c)
-        c.getSystemService(NotificationManager::class.java)?.notify(4242, Notification.Builder(c, CH).setSmallIcon(R.drawable.ic_chat)
+        c.getSystemService(NotificationManager::class.java)?.notify(4242, SahlNotif.apply(c, Notification.Builder(c, CH))
             .setContentTitle(title).setContentText(text).setAutoCancel(true).build())
     }
 }
