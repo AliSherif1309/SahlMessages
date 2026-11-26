@@ -107,6 +107,7 @@
     <string name="copy_selected">Copy selected</string>
     <string name="hidden_preview">🔒 %1$d hidden message(s) — tap Show</string>
     <string name="show">Show</string>
+    <string name="hide">Hide</string>
     <string name="copy_code_hidden">Copy code</string>
     <string name="hide_previews">Hide previews in notifications</string>
     <string name="show_previews">Show previews in notifications</string>
