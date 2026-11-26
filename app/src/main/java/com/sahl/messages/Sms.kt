@@ -479,9 +479,12 @@ object Notify {
     }
 
     /** "Show" was tapped on a hidden notification: show the text, quietly. */
-    fun reveal(c: Context, thread: Long) = post(c, thread, true)
+    fun reveal(c: Context, thread: Long) = post(c, thread, reveal = true, quiet = true)
 
-    private fun post(c: Context, thread: Long, reveal: Boolean) {
+    /** "Hide" was tapped on a revealed notification: hide the text again, quietly. */
+    fun hide(c: Context, thread: Long) = post(c, thread, reveal = false, quiet = true)
+
+    private fun post(c: Context, thread: Long, reveal: Boolean, quiet: Boolean = reveal) {
         channel(c)
         val w = Sahl.wrap(c)
         val id = thread.toInt()
@@ -517,10 +520,11 @@ object Notify {
         val b = Notification.Builder(c, ch).setSmallIcon(R.drawable.ic_chat).setStyle(style)
             .apply { if (subText != null) setSubText(subText) }
             .setContentIntent(open).setAutoCancel(true).setCategory(Notification.CATEGORY_MESSAGE)
-            .setOnlyAlertOnce(reveal)
+            .setOnlyAlertOnce(quiet)
             .setVisibility(if (hidden) Notification.VISIBILITY_PRIVATE else Notification.VISIBILITY_PRIVATE)
-        // Hidden: "Show" comes first, then the usual quick buttons
+        // Hidden: "Show" comes first; when revealed, "Hide" comes first, then the usual quick buttons
         if (hidden) b.addAction(action(w.getString(R.string.show), 3, "show"))
+        else if (Prefs.hidden(c, thread)) b.addAction(action(w.getString(R.string.hide), 4, "hide"))
         b.addAction(reply)
         val code = Sms.otp(body)
         if (code != null) b.addAction(action(if (hidden) w.getString(R.string.copy_code_hidden) else w.getString(R.string.copy_code, code), 2, "copy") { putExtra("code", code) })
@@ -571,6 +575,7 @@ class ActionReceiver : BroadcastReceiver() {
             }
             "read" -> { Sms.markRead(c, thread); Notify.clear(c, thread) }
             "show" -> Notify.reveal(c, thread)
+            "hide" -> Notify.hide(c, thread)
             "copy" -> {
                 c.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("code", intent.getStringExtra("code")))
                 Toast.makeText(c, Sahl.wrap(c).getString(R.string.copied), Toast.LENGTH_SHORT).show()
