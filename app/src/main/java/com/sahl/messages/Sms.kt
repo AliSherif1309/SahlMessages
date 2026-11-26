@@ -16,6 +16,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.provider.ContactsContract.PhoneLookup
 import android.provider.Telephony
@@ -499,19 +500,28 @@ object Notify {
         val name = Names.of(c, address).first ?: address
         val open = PendingIntent.getActivity(c, id, Intent(c, ThreadActivity::class.java).putExtra("thread", thread).putExtra("address", address)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val sender = NPerson.Builder().setName(groupName ?: name).build()
+        val sender = NPerson.Builder().setName(groupName ?: name).setKey(address).build()
         val me = NPerson.Builder().setName(w.getString(R.string.me)).build()
         val style = Notification.MessagingStyle(me)
+            .setGroupConversation(groupName != null)
+            .apply { if (groupName != null) setConversationTitle(groupName) }
         val now = System.currentTimeMillis()
         if (hidden) style.addMessage(w.getString(R.string.hidden_preview, lines.size), now, sender)
         else lines.forEachIndexed { i, l -> style.addMessage(l, now - (lines.size - i) * 1000L, sender) }
 
-        fun action(label: String, code: Int, act: String, extra: Intent.() -> Unit = {}) = Notification.Action.Builder(null, label,
-            PendingIntent.getBroadcast(c, id + code, Intent(c, ActionReceiver::class.java).setAction(act).putExtra("thread", thread).apply(extra),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
+        val bgExtras = Bundle().apply { putBoolean("android.support.action.showsUserInterface", false) }
+        fun action(label: String, code: Int, act: String, semantic: Int = Notification.Action.SEMANTIC_ACTION_NONE, extra: Intent.() -> Unit = {}) =
+            Notification.Action.Builder(null, label,
+                PendingIntent.getBroadcast(c, id + code, Intent(c, ActionReceiver::class.java).setAction(act).putExtra("thread", thread).apply(extra),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+                .setSemanticAction(semantic)
+                .apply { if (semantic != Notification.Action.SEMANTIC_ACTION_NONE) addExtras(bgExtras) }
+                .build()
         val reply = Notification.Action.Builder(null, w.getString(R.string.reply),
             PendingIntent.getBroadcast(c, id, Intent(c, ActionReceiver::class.java).setAction("reply").putExtra("address", address).putExtra("thread", thread),
                 PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            .setSemanticAction(Notification.Action.SEMANTIC_ACTION_REPLY)
+            .addExtras(bgExtras)
             .addRemoteInput(RemoteInput.Builder(KEY_REPLY).setLabel(w.getString(R.string.reply)).build()).build()
         val sim = Sms.simLabel(c, subId)
         val warn = if (groupName == null && !hidden) Assist.warning(c, address, body, Names.of(c, address).first != null) else null
@@ -528,7 +538,7 @@ object Notify {
         b.addAction(reply)
         val code = Sms.otp(body)
         if (code != null) b.addAction(action(if (hidden) w.getString(R.string.copy_code_hidden) else w.getString(R.string.copy_code, code), 2, "copy") { putExtra("code", code) })
-        else b.addAction(action(w.getString(R.string.mark_read), 1, "read"))
+        b.addAction(action(w.getString(R.string.mark_read), 1, "read", Notification.Action.SEMANTIC_ACTION_MARK_AS_READ))
         c.getSystemService(NotificationManager::class.java)?.notify(id, b.build())
     }
 
