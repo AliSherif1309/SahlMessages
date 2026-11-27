@@ -280,7 +280,35 @@ object Sms {
                 "${Telephony.Sms.THREAD_ID}=? AND ${Telephony.Sms.READ}=0", arrayOf(threadId.toString()))
         } catch (e: Exception) { }
         Mms.markRead(c, threadId)
-        c.getSystemService(NotificationManager::class.java)?.cancel(threadId.toInt())
+        Notify.clear(c, threadId)
+    }
+
+    fun markAllRead(c: Context) {
+        if (!isDefault(c)) return
+        try {
+            c.contentResolver.update(Telephony.Sms.CONTENT_URI, ContentValues().apply { put(Telephony.Sms.READ, 1); put(Telephony.Sms.SEEN, 1) },
+                "${Telephony.Sms.READ}=0", null)
+        } catch (e: Exception) { }
+        Mms.markAllRead(c)
+        Notify.clearAll(c)
+    }
+
+    fun markUnread(c: Context, threadId: Long) {
+        if (!isDefault(c)) return
+        var marked = false
+        try {
+            c.contentResolver.query(Telephony.Sms.CONTENT_URI, arrayOf(Telephony.Sms._ID),
+                "${Telephony.Sms.THREAD_ID}=? AND ${Telephony.Sms.TYPE}=${Telephony.Sms.MESSAGE_TYPE_INBOX}",
+                arrayOf(threadId.toString()), "${Telephony.Sms.DATE} DESC")?.use {
+                if (it.moveToFirst()) {
+                    val id = it.getLong(0)
+                    c.contentResolver.update(Telephony.Sms.CONTENT_URI, ContentValues().apply { put(Telephony.Sms.READ, 0) },
+                        "${Telephony.Sms._ID}=?", arrayOf(id.toString()))
+                    marked = true
+                }
+            }
+        } catch (e: Exception) { }
+        if (!marked) Mms.markUnread(c, threadId)
     }
 
     fun deleteMessage(c: Context, id: Long) = try { c.contentResolver.delete(Uri.withAppendedPath(Telephony.Sms.CONTENT_URI, id.toString()), null, null) } catch (e: Exception) { 0 }
@@ -564,6 +592,14 @@ object Notify {
     fun clear(c: Context, thread: Long) {
         Sahl.prefs(c).edit().remove("n_${thread.toInt()}").apply()
         c.getSystemService(NotificationManager::class.java)?.cancel(thread.toInt())
+    }
+
+    fun clearAll(c: Context) {
+        val p = Sahl.prefs(c)
+        val e = p.edit()
+        for (k in p.all.keys) if (k.startsWith("n_")) e.remove(k)
+        e.apply()
+        c.getSystemService(NotificationManager::class.java)?.cancelAll()
     }
 
     fun simple(c: Context, title: String, text: String) {

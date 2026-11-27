@@ -115,4 +115,13 @@
     <string name="previews_shown">ستُظهر إشعارات هذه المحادثة النص</string>
     <string name="set_hide">إخفاء نص الرسائل في الإشعارات (اضغط إظهار للقراءة)</string>
     <string name="set_prayer_silence">كتم إشعارات الرسائل وقت الصلاة (عبر أذان سهل)</string>
+    <string name="mark_all_read">تعيين الكل كمقروء</string>
+    <string name="all_marked_read">تم تعيين جميع الرسائل كمقروءة</string>
+    <string name="no_unread">لا توجد رسائل غير مقروءة</string>
+    <string name="mark_unread">تعيين كغير مقروءة</string>
+    <string name="marked_read">تم التعيين كمقروءة</string>
+    <string name="selected_count">تم تحديد %1$d</string>
+    <string name="select_all">تحديد الكل</string>
+    <string name="deselect_all">إلغاء التحديد</string>
+    <string name="delete_chats_q">حذف %1$d محادثات؟</string>
 </resources>
