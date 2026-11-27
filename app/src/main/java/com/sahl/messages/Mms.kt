@@ -372,6 +372,24 @@ object Mms {
             "thread_id=? AND read=0", arrayOf(thread.toString()))
     } catch (e: Exception) { 0 }
 
+    fun markAllRead(c: Context) = try {
+        c.contentResolver.update(Telephony.Mms.CONTENT_URI, ContentValues().apply { put("read", 1); put("seen", 1) },
+            "read=0", null)
+    } catch (e: Exception) { 0 }
+
+    fun markUnread(c: Context, thread: Long) {
+        try {
+            c.contentResolver.query(Telephony.Mms.CONTENT_URI, arrayOf("_id"),
+                "thread_id=? AND msg_box=1", arrayOf(thread.toString()), "date DESC")?.use {
+                if (it.moveToFirst()) {
+                    val id = it.getLong(0)
+                    c.contentResolver.update(Telephony.Mms.CONTENT_URI, ContentValues().apply { put("read", 0) },
+                        "_id=?", arrayOf(id.toString()))
+                }
+            }
+        } catch (e: Exception) { }
+    }
+
     fun delete(c: Context, id: Long) = try { c.contentResolver.delete(Uri.parse("content://mms/$id"), null, null) } catch (e: Exception) { 0 }
 }
 

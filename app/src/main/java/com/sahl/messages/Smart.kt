@@ -18,10 +18,18 @@ object Prefs {
         if (v in s) s.remove(v) else s.add(v)
         Sahl.prefs(c).edit().putStringSet(k, s).apply()
     }
+    private fun setAll(c: Context, k: String, ids: Collection<Long>, on: Boolean) {
+        val s = set(c, k).toMutableSet()
+        for (id in ids) if (on) s.add(id.toString()) else s.remove(id.toString())
+        Sahl.prefs(c).edit().putStringSet(k, s).apply()
+    }
     fun pinned(c: Context, thread: Long) = thread.toString() in set(c, "pinned")
     fun muted(c: Context, thread: Long) = thread.toString() in set(c, "muted")
     fun togglePin(c: Context, thread: Long) = toggle(c, "pinned", thread)
     fun toggleMute(c: Context, thread: Long) = toggle(c, "muted", thread)
+    fun setPinned(c: Context, threads: Collection<Long>, on: Boolean) = setAll(c, "pinned", threads, on)
+    fun setMuted(c: Context, threads: Collection<Long>, on: Boolean) = setAll(c, "muted", threads, on)
+    fun setHiddenChat(c: Context, threads: Collection<Long>, on: Boolean) = setAll(c, "hidden_chats", threads, on)
     fun deliveryReports(c: Context) = Sahl.prefs(c).getBoolean("delivery", true)
     fun undoSend(c: Context) = Sahl.prefs(c).getBoolean("undo_send", true)
     fun cleanCodes(c: Context) = Sahl.prefs(c).getBoolean("clean_codes", false)

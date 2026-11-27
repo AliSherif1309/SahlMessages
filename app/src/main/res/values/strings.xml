@@ -115,4 +115,13 @@
     <string name="previews_shown">Notifications for this chat will show the text</string>
     <string name="set_hide">Hide message text in notifications (tap Show to read)</string>
     <string name="set_prayer_silence">Silence message alerts during prayer (via Sahl Adhan)</string>
+    <string name="mark_all_read">Mark all as read</string>
+    <string name="all_marked_read">All messages marked as read</string>
+    <string name="no_unread">No unread messages</string>
+    <string name="mark_unread">Mark as unread</string>
+    <string name="marked_read">Marked as read</string>
+    <string name="selected_count">%1$d selected</string>
+    <string name="select_all">Select all</string>
+    <string name="deselect_all">Deselect all</string>
+    <string name="delete_chats_q">Delete %1$d conversations?</string>
 </resources>

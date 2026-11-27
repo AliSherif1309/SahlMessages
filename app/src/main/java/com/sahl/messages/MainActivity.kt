@@ -38,6 +38,12 @@ class MainActivity : SahlActivity() {
     private var shown: List<Conversation> = emptyList()
     private val adapter = Adapter()
     private var simLabels: Map<Int, String> = emptyMap()
+    private val selected = LinkedHashSet<Long>()
+    private val selecting get() = selected.isNotEmpty()
+    private lateinit var normalHeader: View
+    private lateinit var selectBar: LinearLayout
+    private lateinit var selectTitle: TextView
+    private lateinit var fabView: View
 
     private val perms = arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS,
         Manifest.permission.READ_CONTACTS, Manifest.permission.READ_PHONE_STATE)
@@ -54,9 +60,26 @@ class MainActivity : SahlActivity() {
         val frame = FrameLayout(this).apply { setBackgroundColor(col(R.color.bg)) }
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         frame.addView(root, FrameLayout.LayoutParams(-1, -1))
-        root.addView(header(getString(R.string.app_name), false, listOf(
+        normalHeader = header(getString(R.string.app_name), false, listOf(
             R.drawable.ic_star to { startActivity(Intent(this, StarredActivity::class.java)) },
-            R.drawable.ic_tune to { startActivity(Intent(this, SettingsActivity::class.java)) })))
+            R.drawable.ic_tune to { startActivity(Intent(this, SettingsActivity::class.java)) },
+            R.drawable.ic_more to { overflowMenu() }))
+        root.addView(normalHeader)
+        selectBar = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(col(R.color.tonal))
+            setPadding(px(8), px(10), px(8), px(10))
+            visibility = View.GONE
+            addView(iconButton(R.drawable.ic_close, 0, col(R.color.text), 44, 22) { clearSelection() })
+            selectTitle = text("", 18f, col(R.color.text), true).apply { setPaddingRelative(px(8), 0, 0, 0) }
+            addView(selectTitle, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(iconButton(R.drawable.ic_check, 0, col(R.color.emerald), 44, 22) { markSelectedRead() })
+            addView(iconButton(R.drawable.ic_star, 0, col(R.color.text), 44, 22) { togglePinSelected() })
+            addView(iconButton(R.drawable.ic_bell, 0, col(R.color.text), 44, 22) { toggleMuteSelected() })
+            addView(iconButton(R.drawable.ic_delete, 0, col(R.color.danger), 44, 22) { deleteSelected() })
+            addView(iconButton(R.drawable.ic_more, 0, col(R.color.text), 44, 22) { selectionMenu() })
+        }
+        root.addView(selectBar)
         banner = card().apply { background = round(col(R.color.tonal), 22f); elevation = 0f }
         root.addView(banner, LinearLayout.LayoutParams(-1, -2).apply { setMargins(px(16), px(4), px(16), px(6)) })
         val (search, _) = searchBox(getString(R.string.search)) { query = it; filter() }
@@ -78,7 +101,8 @@ class MainActivity : SahlActivity() {
         }
         body.addView(empty, FrameLayout.LayoutParams(-1, -1))
         root.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
-        frame.addView(fab(R.drawable.ic_add) { startActivity(Intent(this, ComposeActivity::class.java)) },
+        fabView = fab(R.drawable.ic_add) { startActivity(Intent(this, ComposeActivity::class.java)) }
+        frame.addView(fabView,
             FrameLayout.LayoutParams(px(58), px(58), Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, px(22), px(26)) })
         setContentView(frame)
         Updater.dailyCheck(this)
@@ -98,6 +122,11 @@ class MainActivity : SahlActivity() {
     }
 
     override fun onDestroy() { super.onDestroy(); if (observing) contentResolver.unregisterContentObserver(observer) }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (selecting) clearSelection() else super.onBackPressed()
+    }
 
     private fun askPermissions() {
         val p = perms.toMutableList()
@@ -242,6 +271,9 @@ class MainActivity : SahlActivity() {
             val extra = deepSearch(query).filter { t -> shown.none { it.threadId == t } }
             if (extra.isNotEmpty()) shown = shown + all.filter { it.threadId in extra }
         }
+        val validIds = all.map { it.threadId }.toSet()
+        selected.retainAll(validIds)
+        syncSelectionChrome()
         adapter.notifyDataSetChanged()
         empty.visibility = if (shown.isEmpty() && granted()) View.VISIBLE else View.GONE
     }
@@ -254,9 +286,11 @@ class MainActivity : SahlActivity() {
         out
     } catch (e: Exception) { emptySet() }
 
-    private fun markReadLocally(threadId: Long) {
+    private fun markReadLocally(threadId: Long) = markReadLocally(setOf(threadId))
+
+    private fun markReadLocally(threadIds: Set<Long>) {
         var changed = false
-        all = all.map { if (it.threadId == threadId && it.unread > 0) { changed = true; it.copy(unread = 0) } else it }
+        all = all.map { if (it.threadId in threadIds && it.unread > 0) { changed = true; it.copy(unread = 0) } else it }
         if (changed) { renderChips(); filter(); saveCache(all) }
     }
 
@@ -266,24 +300,131 @@ class MainActivity : SahlActivity() {
             .putExtra("address", if (cv.group) cv.members.joinToString(",") else cv.address))
     }
 
-    private fun actions(cv: Conversation) {
+    private fun syncSelectionChrome() {
+        val on = selecting
+        normalHeader.visibility = if (on) View.GONE else View.VISIBLE
+        selectBar.visibility = if (on) View.VISIBLE else View.GONE
+        fabView.visibility = if (on) View.GONE else View.VISIBLE
+        if (on) selectTitle.text = getString(R.string.selected_count, selected.size)
+    }
+
+    private fun updateSelectionUi() {
+        syncSelectionChrome()
+        adapter.notifyDataSetChanged()
+    }
+
+    private fun toggleSelect(threadId: Long) {
+        if (!selected.add(threadId)) selected.remove(threadId)
+        updateSelectionUi()
+    }
+
+    private fun clearSelection() {
+        selected.clear()
+        updateSelectionUi()
+    }
+
+    private fun selectAllShown() {
+        selected.addAll(shown.map { it.threadId })
+        updateSelectionUi()
+    }
+
+    private fun selectedConversations(): List<Conversation> = all.filter { it.threadId in selected }
+
+    private fun overflowMenu() {
+        val items = mutableListOf(
+            Triple(R.drawable.ic_check, getString(R.string.mark_all_read)) { markAllRead() }
+        )
+        if (shown.isNotEmpty()) {
+            items.add(Triple(R.drawable.ic_chat, getString(R.string.select_all)) { selectAllShown() })
+        }
+        sheet(null, items)
+    }
+
+    private fun markAllRead() {
+        if (!Sms.isDefault(this)) { toast(R.string.make_default); return }
+        if (all.none { it.unread > 0 }) { toast(R.string.no_unread); return }
+        all = all.map { if (it.unread > 0) it.copy(unread = 0) else it }
+        renderChips(); filter(); saveCache(all)
+        toast(R.string.all_marked_read)
+        Thread { Sms.markAllRead(this) }.start()
+    }
+
+    private fun markSelectedRead() {
+        if (!Sms.isDefault(this)) { toast(R.string.make_default); return }
+        val ids = selected.toSet()
+        clearSelection()
+        markReadLocally(ids)
+        toast(R.string.marked_read)
+        Thread { for (id in ids) Sms.markRead(this, id) }.start()
+    }
+
+    private fun markSelectedUnread() {
+        if (!Sms.isDefault(this)) { toast(R.string.make_default); return }
+        val ids = selected.toSet()
+        clearSelection()
+        var changed = false
+        all = all.map { if (it.threadId in ids && it.unread == 0) { changed = true; it.copy(unread = 1) } else it }
+        if (changed) { renderChips(); filter(); saveCache(all) }
+        Thread { for (id in ids) Sms.markUnread(this, id) }.start()
+    }
+
+    private fun togglePinSelected() {
+        val cvs = selectedConversations()
+        val pin = cvs.any { !it.pinned }
+        val ids = selected.toSet()
+        Prefs.setPinned(this, ids, pin)
+        clearSelection()
+        load()
+    }
+
+    private fun toggleMuteSelected() {
+        val cvs = selectedConversations()
+        val mute = cvs.any { !it.muted }
+        val ids = selected.toSet()
+        Prefs.setMuted(this, ids, mute)
+        clearSelection()
+        load()
+    }
+
+    private fun toggleHiddenSelected() {
+        val ids = selected.toSet()
+        val hide = ids.any { !Prefs.hiddenChat(this, it) }
+        Prefs.setHiddenChat(this, ids, hide)
+        toast(if (hide) R.string.previews_hidden else R.string.previews_shown)
+        clearSelection()
+    }
+
+    private fun deleteSelected() {
+        val ids = selected.toSet()
+        val msg = if (ids.size == 1) getString(R.string.delete_chat_q) else getString(R.string.delete_chats_q, ids.size)
+        AlertDialog.Builder(this).setMessage(msg)
+            .setPositiveButton(R.string.delete) { _, _ ->
+                clearSelection()
+                all = all.filter { it.threadId !in ids }
+                renderChips(); filter(); saveCache(all)
+                Thread { for (id in ids) Sms.deleteThread(this, id); runOnUiThread { load() } }.start()
+            }
+            .setNegativeButton(R.string.cancel, null).show()
+    }
+
+    private fun selectionMenu() {
+        val cvs = selectedConversations()
+        val allShownSelected = shown.isNotEmpty() && shown.all { it.threadId in selected }
         val items = mutableListOf<Triple<Int, String, () -> Unit>>(
-            Triple(R.drawable.ic_check, getString(R.string.mark_read)) {
-                if (Sms.isDefault(this)) markReadLocally(cv.threadId)
-                Thread { Sms.markRead(this, cv.threadId) }.start()
+            Triple(R.drawable.ic_chat, getString(if (allShownSelected) R.string.deselect_all else R.string.select_all)) {
+                if (allShownSelected) clearSelection() else selectAllShown()
             },
-            Triple(R.drawable.ic_call, getString(R.string.call)) { Sahl.callVia(this, cv.address) },
-            Triple(R.drawable.ic_star, getString(if (cv.pinned) R.string.unpin else R.string.pin)) { Prefs.togglePin(this, cv.threadId); load() },
-            Triple(R.drawable.ic_bell, getString(if (cv.muted) R.string.unmute else R.string.mute)) { Prefs.toggleMute(this, cv.threadId); load() },
-            Triple(R.drawable.ic_visibility_off, getString(if (Prefs.hiddenChat(this, cv.threadId)) R.string.show_previews else R.string.hide_previews)) {
-                Prefs.toggleHiddenChat(this, cv.threadId); toast(if (Prefs.hiddenChat(this, cv.threadId)) R.string.previews_hidden else R.string.previews_shown)
-            },
-            Triple(R.drawable.ic_delete, getString(R.string.delete_chat)) {
-                AlertDialog.Builder(this).setMessage(R.string.delete_chat_q)
-                    .setPositiveButton(R.string.delete) { _, _ -> Thread { Sms.deleteThread(this, cv.threadId); runOnUiThread { load() } }.start() }
-                    .setNegativeButton(R.string.cancel, null).show()
-            })
-        sheet(cv.name ?: cv.address, items)
+            Triple(R.drawable.ic_check, getString(R.string.mark_read)) { markSelectedRead() },
+            Triple(R.drawable.ic_mail, getString(R.string.mark_unread)) { markSelectedUnread() },
+            Triple(R.drawable.ic_star, getString(if (cvs.any { !it.pinned }) R.string.pin else R.string.unpin)) { togglePinSelected() },
+            Triple(R.drawable.ic_bell, getString(if (cvs.any { !it.muted }) R.string.mute else R.string.unmute)) { toggleMuteSelected() },
+            Triple(R.drawable.ic_visibility_off, getString(if (selected.any { !Prefs.hiddenChat(this, it) }) R.string.hide_previews else R.string.show_previews)) { toggleHiddenSelected() }
+        )
+        if (cvs.size == 1) {
+            items.add(Triple(R.drawable.ic_call, getString(R.string.call)) { Sahl.callVia(this, cvs[0].address); clearSelection() })
+        }
+        items.add(Triple(R.drawable.ic_delete, getString(R.string.delete_chat)) { deleteSelected() })
+        sheet(getString(R.string.selected_count, selected.size), items)
     }
 
     private fun stamp(t: Long): String {
@@ -305,18 +446,32 @@ class MainActivity : SahlActivity() {
         override fun getView(p: Int, cv: View?, parent: ViewGroup): View {
             val c = shown[p]
             val title = c.name ?: c.address
+            val isSel = c.threadId in selected
             val row = LinearLayout(this@MainActivity).apply {
                 gravity = Gravity.CENTER_VERTICAL; setPaddingRelative(px(18), px(10), px(18), px(10))
-                setOnClickListener { open(c) }; setOnLongClickListener { actions(c); true }
+                setBackgroundColor(col(if (isSel) R.color.tonal else R.color.bg))
+                setOnClickListener { if (selecting) toggleSelect(c.threadId) else open(c) }
+                setOnLongClickListener { toggleSelect(c.threadId); true }
             }.press(0f)
             val (f, iv, letter) = avatar(50)
-            f.background = oval(avatarColor(title))
-            letter.text = if (c.name != null) Norm.section(c.name).let { if (it == "#") "" else it } else ""
-            if (letter.text.isEmpty()) f.addView(ImageView(this@MainActivity).apply {
-                setImageResource(if (c.group) R.drawable.ic_people else if (c.address.any { it.isLetter() }) R.drawable.ic_work else R.drawable.ic_person_add)
-                imageTintList = ColorStateList.valueOf(0xCCFFFFFF.toInt())
-            }, FrameLayout.LayoutParams(px(24), px(24), Gravity.CENTER))
-            Thumbs.load(this@MainActivity, c.photo, iv, letter)
+            if (isSel) {
+                f.background = oval(col(R.color.emerald))
+                letter.visibility = View.GONE
+                iv.visibility = View.GONE
+                iv.tag = null
+                f.addView(ImageView(this@MainActivity).apply {
+                    setImageResource(R.drawable.ic_check)
+                    imageTintList = ColorStateList.valueOf(0xFFFFFFFF.toInt())
+                }, FrameLayout.LayoutParams(px(24), px(24), Gravity.CENTER))
+            } else {
+                f.background = oval(avatarColor(title))
+                letter.text = if (c.name != null) Norm.section(c.name).let { if (it == "#") "" else it } else ""
+                if (letter.text.isEmpty()) f.addView(ImageView(this@MainActivity).apply {
+                    setImageResource(if (c.group) R.drawable.ic_people else if (c.address.any { it.isLetter() }) R.drawable.ic_work else R.drawable.ic_person_add)
+                    imageTintList = ColorStateList.valueOf(0xCCFFFFFF.toInt())
+                }, FrameLayout.LayoutParams(px(24), px(24), Gravity.CENTER))
+                Thumbs.load(this@MainActivity, c.photo, iv, letter)
+            }
             row.addView(f)
             val t = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; setPaddingRelative(px(14), 0, px(8), 0) }
             val top = LinearLayout(this@MainActivity).apply { gravity = Gravity.CENTER_VERTICAL }
@@ -340,8 +495,11 @@ class MainActivity : SahlActivity() {
             Sms.otp(c.snippet)?.let { code -> bottom.addView(text(code, 12f, col(R.color.emerald), true).apply {
                 background = round(col(R.color.tonal), 10f); setPadding(px(8), px(2), px(8), px(2))
                 setOnClickListener {
-                    getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("code", code))
-                    toast(R.string.copied)
+                    if (selecting) toggleSelect(c.threadId)
+                    else {
+                        getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("code", code))
+                        toast(R.string.copied)
+                    }
                 }
             }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = px(6) }) }
             bottom.addView(text((if (c.outgoing) getString(R.string.you) + " " else "") + c.snippet.replace('\n', ' '), 14f,
@@ -352,10 +510,12 @@ class MainActivity : SahlActivity() {
             }, LinearLayout.LayoutParams(-2, -2).apply { marginStart = px(8) })
             t.addView(bottom)
             row.addView(t, LinearLayout.LayoutParams(0, -2, 1f))
+            if (selecting) return row
             return SwipeRow(this@MainActivity, row, col(R.color.bg),
                 R.drawable.ic_call, col(R.color.ok), { Sahl.callVia(this@MainActivity, c.address) },
                 R.drawable.ic_check, col(R.color.emerald), {
-                    if (Sms.isDefault(this@MainActivity)) markReadLocally(c.threadId)
+                    if (!Sms.isDefault(this@MainActivity)) { toast(R.string.make_default); return@SwipeRow }
+                    markReadLocally(c.threadId)
                     Thread { Sms.markRead(this@MainActivity, c.threadId) }.start()
                 })
         }
