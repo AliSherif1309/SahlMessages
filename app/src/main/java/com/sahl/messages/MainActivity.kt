@@ -59,6 +59,9 @@ class MainActivity : SahlActivity() {
     private var lastBankReport: BankReport? = null
     private var hiddenLookups: Set<String> = emptySet()
     private var searchMatches: Map<Long, Pair<Long, String>> = emptyMap()
+    private var pendingSearch: Runnable? = null
+    private var lastDeepQuery = ""
+    private var lastBankKey = ""
 
     private val perms = arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS,
         Manifest.permission.READ_CONTACTS, Manifest.permission.READ_PHONE_STATE)
@@ -305,6 +308,7 @@ class MainActivity : SahlActivity() {
             if (fast.isNotEmpty()) runOnUiThread { all = fast; renderChips(); filter() }
             // 2. Full pass: resolve any missing contact names in the background
             val c = try { Sms.conversations(this, lookupContacts = true) } catch (e: Exception) { fast }
+            Spam.warmGuardCache(this, c.filter { !it.saved && !it.group }.map { it.address })
             runOnUiThread { all = c; renderChips(); filter() }
             saveCache(c)
             Cleanup.run(this)
@@ -340,13 +344,35 @@ class MainActivity : SahlActivity() {
                     Norm.text(cv.name ?: "").contains(w) || Norm.text(cv.snippet).contains(w)
                 } || (dq.length >= 3 && Norm.digits(cv.address).contains(dq)))
         }
-        // Search inside every message too (and remember matched message ID/body for jump + snippet)
-        searchMatches = if (words.isNotEmpty() && query.length >= 2) {
-            val matches = deepSearch(query)
-            val extraIds = matches.keys.filter { t -> shown.none { it.threadId == t } }.toSet()
-            if (extraIds.isNotEmpty()) shown = shown + inFolder.filter { it.threadId in extraIds }
-            matches
-        } else emptyMap()
+        // Search inside every message asynchronously (debounced) so typing never blocks the UI thread
+        if (words.isNotEmpty() && query.length >= 2) {
+            val q = query
+            if (q == lastDeepQuery && searchMatches.isNotEmpty()) {
+                val extraIds = searchMatches.keys.filter { t -> shown.none { it.threadId == t } }.toSet()
+                if (extraIds.isNotEmpty()) shown = shown + inFolder.filter { it.threadId in extraIds }
+            } else {
+                pendingSearch?.let { main.removeCallbacks(it) }
+                val r = Runnable {
+                    Thread {
+                        val matches = deepSearch(q)
+                        runOnUiThread {
+                            if (query == q) {
+                                lastDeepQuery = q
+                                searchMatches = matches
+                                filter()
+                            }
+                        }
+                    }.start()
+                }
+                pendingSearch = r
+                main.postDelayed(r, 180)
+            }
+        } else {
+            pendingSearch?.let { main.removeCallbacks(it) }
+            pendingSearch = null
+            lastDeepQuery = ""
+            searchMatches = emptyMap()
+        }
         val validIds = all.map { it.threadId }.toSet()
         selected.retainAll(validIds)
         syncSelectionChrome()
@@ -382,9 +408,15 @@ class MainActivity : SahlActivity() {
             bankCard.visibility = View.GONE
             return
         }
+        val key = bankConvs.joinToString(",") { "${it.threadId}:${it.date}" }
+        if (key == lastBankKey && lastBankReport != null) {
+            renderBankCard(lastBankReport!!)
+            return
+        }
         Thread {
             val report = BankSummary.analyze(this, bankConvs)
             runOnUiThread {
+                lastBankKey = key
                 if (folder == 0 && cat == Category.BANKS) renderBankCard(report)
             }
         }.start()
@@ -532,9 +564,12 @@ class MainActivity : SahlActivity() {
     private fun selectedConversations(): List<Conversation> = all.filter { it.threadId in selected }
 
     private fun overflowMenu() {
-        val archCount = all.count { bucketOf(it) == 1 }
-        val spamCount = all.count { bucketOf(it) == 2 }
-        val lockCount = all.count { bucketOf(it) == 3 }
+        var archCount = 0; var spamCount = 0; var lockCount = 0
+        for (cv in all) when (bucketOf(cv)) {
+            1 -> archCount++
+            2 -> spamCount++
+            3 -> lockCount++
+        }
         val schedCount = Scheduled.all(this).size
         val items = mutableListOf(
             Triple(R.drawable.ic_check, getString(R.string.mark_all_read)) { markAllRead() }

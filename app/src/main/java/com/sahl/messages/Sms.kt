@@ -424,7 +424,7 @@ class SmsDeliverReceiver : BroadcastReceiver() {
                 })
                 val tid = Sms.threadFor(c, address)
                 Archive.unarchive(c, tid)
-                if (!Spam.isSpam(c, tid, address, body) && !Prefs.muted(c, tid)) Notify.message(c, address, body, threadId = tid, subId = sub)
+                if (!Spam.isSpam(c, tid, address, body, checkGuard = true) && !Prefs.muted(c, tid)) Notify.message(c, address, body, threadId = tid, subId = sub)
             } catch (e: Exception) { } finally { pending.finish() }
         }.start()
     }
