@@ -4,5 +4,6 @@
         <item name="android:colorAccent">@color/gold</item>
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@color/emerald_dark</item>
+        <item name="android:windowOptOutEdgeToEdgeEnforcement" xmlns:tools="http://schemas.android.com/tools" tools:targetApi="35">true</item>
     </style>
 </resources>

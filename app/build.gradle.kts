@@ -4,11 +4,11 @@ plugins {
 }
 android {
     namespace = "com.sahl.messages"
-    compileSdk = 34
+    compileSdk = 35
     defaultConfig {
         applicationId = "com.sahl.messages"
         minSdk = 29
-        targetSdk = 34
+        targetSdk = 35
         // GitHub Actions run number becomes the version, so every release is newer
         val run = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionCode = run

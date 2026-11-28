@@ -10,6 +10,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Telephony
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.BackgroundColorSpan
+import android.text.style.ForegroundColorSpan
 import android.text.util.Linkify
 import android.view.Gravity
 import android.view.View
@@ -41,6 +45,15 @@ class ThreadActivity : SahlActivity() {
     private lateinit var warnBox: TextView
     private var sims: List<Sim> = emptyList()
     private var subId = -1
+    private lateinit var searchBar: LinearLayout
+    private lateinit var searchInput: EditText
+    private lateinit var searchCount: TextView
+    private var searchQuery = ""
+    private var matchPositions: List<Int> = emptyList()
+    private var matchIndex = -1
+    private var highlightMsgId = -1L
+    private var highlightActive = false
+    private val clearHighlight = Runnable { highlightActive = false; list.invalidateViews() }
 
     private val observer = object : ContentObserver(main) {
         override fun onChange(selfChange: Boolean) { main.removeCallbacks(reload); main.postDelayed(reload, 250) }
@@ -58,9 +71,39 @@ class ThreadActivity : SahlActivity() {
         val saved = group || (info?.saved == true)
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(col(R.color.bg)) }
         root.addView(header(name ?: address, true, listOf(
+            R.drawable.ic_search to { toggleSearch() },
             R.drawable.ic_call to { Sahl.callVia(this, address) },
             R.drawable.ic_more to { menu() }
         ), large = false))
+        searchBar = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            background = round(col(R.color.tonal), 18f)
+            setPadding(px(12), px(4), px(6), px(4))
+            visibility = View.GONE
+        }
+        searchInput = EditText(this).apply {
+            hint = getString(R.string.search_thread_hint); background = null; typeface = font; textSize = 15f; isSingleLine = true
+            setTextColor(col(R.color.text)); setHintTextColor(col(R.color.sub))
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    searchQuery = s?.toString() ?: ""
+                    recomputeMatches(jumpToLatest = true)
+                }
+            })
+        }
+        searchCount = text("", 12f, col(R.color.sub), true).apply { setPadding(px(6), 0, px(6), 0) }
+        searchBar.addView(searchInput, LinearLayout.LayoutParams(0, -2, 1f))
+        searchBar.addView(searchCount)
+        searchBar.addView(text("↑", 16f, col(R.color.emerald), true).apply {
+            setPadding(px(10), px(6), px(10), px(6)); setOnClickListener { stepMatch(-1) }
+        }.press(12f))
+        searchBar.addView(text("↓", 16f, col(R.color.emerald), true).apply {
+            setPadding(px(10), px(6), px(10), px(6)); setOnClickListener { stepMatch(1) }
+        }.press(12f))
+        searchBar.addView(iconButton(R.drawable.ic_close, 0, col(R.color.sub), 34, 18) { closeSearch() })
+        root.addView(searchBar, LinearLayout.LayoutParams(-1, -2).apply { setMargins(px(12), px(2), px(12), px(4)) })
         if (group) root.addView(text(getString(R.string.group_of, members.size), 12f, col(R.color.sub)).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, px(4)) })
         else if (saved || address.any { it.isLetter() }) Unit
         else root.addView(text(listOfNotNull(if (name != null) address else null, getString(R.string.not_in_contacts),
@@ -100,7 +143,9 @@ class ThreadActivity : SahlActivity() {
         // Compose bar
         val bar = LinearLayout(this).apply { gravity = Gravity.BOTTOM; setPadding(px(10), px(6), px(10), px(10)) }
         bar.addView(iconButton(R.drawable.ic_add, 0, col(R.color.emerald), 46, 24) { pickImage() },
-            LinearLayout.LayoutParams(px(46), px(46)).apply { marginEnd = px(4); bottomMargin = px(4) })
+            LinearLayout.LayoutParams(px(46), px(46)).apply { marginEnd = px(2); bottomMargin = px(4) })
+        bar.addView(iconButton(R.drawable.ic_note, 0, col(R.color.emerald), 42, 22) { showSnippets() },
+            LinearLayout.LayoutParams(px(42), px(42)).apply { marginEnd = px(4); bottomMargin = px(6) })
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; background = round(col(R.color.tonal), 24f); setPaddingRelative(px(16), px(4), px(10), px(4))
         }
@@ -110,7 +155,10 @@ class ThreadActivity : SahlActivity() {
             addTextChangedListener(object : android.text.TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                 override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                override fun afterTextChanged(s: android.text.Editable?) { updateCounter() }
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    updateCounter()
+                    Drafts.save(this@ThreadActivity, thread, address, s?.toString() ?: "")
+                }
             })
         }
         box.addView(input)
@@ -130,7 +178,22 @@ class ThreadActivity : SahlActivity() {
         setContentView(root)
         window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
 
-        intent.getStringExtra("body")?.let { input.setText(it) }
+        val bodyExtra = intent.getStringExtra("body")
+        if (bodyExtra != null) {
+            input.setText(bodyExtra)
+        } else {
+            val draft = Drafts.get(this, thread, address)
+            if (draft.isNotEmpty()) {
+                input.setText(draft)
+                input.setSelection(draft.length)
+            }
+        }
+        highlightMsgId = intent.getLongExtra("highlight_msg_id", -1L)
+        intent.getStringExtra("search_query")?.takeIf { it.isNotBlank() }?.let { q ->
+            searchQuery = q
+            searchBar.visibility = View.VISIBLE
+            searchInput.setText(q)
+        }
         sims = Sms.sims(this)
         subId = Sms.defaultSub()
         if (sims.size > 1) { simChip.visibility = View.VISIBLE; if (sims.none { it.subId == subId }) subId = sims[0].subId; showSim() }
@@ -142,7 +205,16 @@ class ThreadActivity : SahlActivity() {
         load()
     }
 
-    override fun onPause() { super.onPause(); contentResolver.unregisterContentObserver(observer) }
+    override fun onPause() {
+        super.onPause()
+        contentResolver.unregisterContentObserver(observer)
+        Drafts.save(this, thread, address, input.text.toString())
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (searchBar.visibility == View.VISIBLE) closeSearch() else super.onBackPressed()
+    }
 
     private fun showSim() { simChip.text = sims.firstOrNull { it.subId == subId }?.label ?: "SIM" }
     private fun nextSim() {
@@ -178,8 +250,95 @@ class ThreadActivity : SahlActivity() {
                     background = round(col(R.color.tonal), 16f); setPadding(px(14), px(7), px(14), px(7))
                     setOnClickListener { input.setText(q); input.setSelection(q.length); suggestBox.removeAllViews() }
                 }.press(16f), LinearLayout.LayoutParams(-2, -2).apply { marginEnd = px(6) })
+                if (highlightMsgId > 0L) {
+                    val idx = msgs.indexOfFirst { (it is Msg && it.id == highlightMsgId) || (it is MmsMsg && it.id == highlightMsgId) }
+                    if (idx >= 0) {
+                        highlightActive = true
+                        list.post { list.setSelection(idx) }
+                        main.removeCallbacks(clearHighlight)
+                        main.postDelayed(clearHighlight, 2200L)
+                    }
+                }
+                if (searchQuery.isNotBlank()) recomputeMatches(jumpToLatest = highlightMsgId <= 0L)
             }
         }.start()
+    }
+
+    private fun toggleSearch() {
+        if (searchBar.visibility == View.VISIBLE) closeSearch()
+        else {
+            searchBar.visibility = View.VISIBLE
+            searchInput.requestFocus()
+        }
+    }
+
+    private fun closeSearch() {
+        searchBar.visibility = View.GONE
+        searchInput.setText("")
+        searchQuery = ""
+        matchPositions = emptyList()
+        matchIndex = -1
+        highlightActive = false
+        searchCount.text = ""
+        list.invalidateViews()
+    }
+
+    private fun bodyOf(o: Any): String = if (o is Msg) o.body else (o as MmsMsg).text
+
+    private fun recomputeMatches(jumpToLatest: Boolean) {
+        val q = Norm.text(searchQuery).trim()
+        if (q.isEmpty()) {
+            matchPositions = emptyList()
+            matchIndex = -1
+            searchCount.text = ""
+            list.invalidateViews()
+            return
+        }
+        matchPositions = msgs.indices.filter { Norm.text(bodyOf(msgs[it])).contains(q) }
+        if (matchPositions.isEmpty()) {
+            matchIndex = -1
+            searchCount.text = getString(R.string.no_matches)
+            list.invalidateViews()
+            return
+        }
+        if (jumpToLatest || matchIndex !in matchPositions.indices) {
+            matchIndex = matchPositions.lastIndex
+        }
+        jumpToMatch()
+    }
+
+    private fun stepMatch(delta: Int) {
+        if (matchPositions.isEmpty()) return
+        matchIndex = (matchIndex + delta + matchPositions.size) % matchPositions.size
+        jumpToMatch()
+    }
+
+    private fun jumpToMatch() {
+        if (matchIndex !in matchPositions.indices) return
+        val pos = matchPositions[matchIndex]
+        searchCount.text = "${matchIndex + 1} / ${matchPositions.size}"
+        highlightActive = true
+        list.setSelection(pos)
+        list.invalidateViews()
+        main.removeCallbacks(clearHighlight)
+        main.postDelayed(clearHighlight, 2200L)
+    }
+
+    private fun highlightText(body: String): CharSequence {
+        val q = searchQuery.trim()
+        if (q.isEmpty()) return body
+        val sp = SpannableString(body)
+        val lowerBody = body.lowercase()
+        val lowerQ = q.lowercase()
+        var idx = lowerBody.indexOf(lowerQ)
+        val bg = col(R.color.gold)
+        val fg = 0xFF1B2A26.toInt()
+        while (idx >= 0) {
+            sp.setSpan(BackgroundColorSpan(bg), idx, idx + lowerQ.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sp.setSpan(ForegroundColorSpan(fg), idx, idx + lowerQ.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            idx = lowerBody.indexOf(lowerQ, idx + lowerQ.length)
+        }
+        return sp
     }
 
     private fun send() {
@@ -188,6 +347,8 @@ class ThreadActivity : SahlActivity() {
         if (t.isBlank() && img == null) return
         if (!Sms.isDefault(this)) { toast(R.string.make_default); return }
         input.setText(""); clearImage()
+        Drafts.clear(this, thread, address)
+        Archive.unarchive(this, thread)
         val sub = subId
         val job = Runnable {
             undoBar.visibility = View.GONE; pendingSend = null
@@ -224,7 +385,7 @@ class ThreadActivity : SahlActivity() {
                 val cal = java.util.Calendar.getInstance().apply { set(y, m, d, h, min, 0) }
                 if (cal.timeInMillis <= System.currentTimeMillis()) { toast(R.string.pick_future); return@TimePickerDialog }
                 Scheduled.add(this, address, t, cal.timeInMillis, subId)
-                input.setText(""); renderScheduled(); toast(R.string.scheduled_ok)
+                input.setText(""); Drafts.clear(this, thread, address); renderScheduled(); toast(R.string.scheduled_ok)
             }, now.get(java.util.Calendar.HOUR_OF_DAY), now.get(java.util.Calendar.MINUTE), true).show()
         }, now.get(java.util.Calendar.YEAR), now.get(java.util.Calendar.MONTH), now.get(java.util.Calendar.DAY_OF_MONTH)).show()
     }
@@ -270,8 +431,55 @@ class ThreadActivity : SahlActivity() {
 
     private fun clearImage() { image = null; attachBox.removeAllViews(); attachBox.visibility = View.GONE }
 
+    private fun showSnippets() {
+        val list = Snippets.list(this)
+        val items = mutableListOf<Triple<Int, String, () -> Unit>>()
+        for (s in list) {
+            items.add(Triple(R.drawable.ic_note, "${s.title} — ${s.body.take(32)}") {
+                val cur = input.text.toString()
+                val pos = input.selectionStart.coerceIn(0, cur.length)
+                val insert = if (pos > 0 && cur[pos - 1] != ' ' && cur[pos - 1] != '\n') " ${s.body}" else s.body
+                input.text.insert(pos, insert)
+            })
+        }
+        items.add(Triple(R.drawable.ic_add, getString(R.string.add_snippet)) { addSnippetDialog() })
+        if (list.isNotEmpty()) {
+            items.add(Triple(R.drawable.ic_delete, getString(R.string.delete)) { manageSnippetsDialog() })
+        }
+        sheet(getString(R.string.snippets), items)
+    }
+
+    private fun addSnippetDialog(existing: Snippets.Snippet? = null) {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(18), px(10), px(18), px(4)) }
+        val etTitle = EditText(this).apply {
+            hint = getString(R.string.snippet_title_hint); typeface = font; setTextColor(col(R.color.text))
+            if (existing != null) setText(existing.title)
+        }
+        val etBody = EditText(this).apply {
+            hint = getString(R.string.snippet_body_hint); typeface = font; setTextColor(col(R.color.text)); minLines = 2
+            if (existing != null) setText(existing.body)
+        }
+        box.addView(etTitle); box.addView(etBody)
+        AlertDialog.Builder(this).setTitle(R.string.add_snippet).setView(box)
+            .setPositiveButton(R.string.save) { _, _ ->
+                if (existing == null) Snippets.add(this, etTitle.text.toString(), etBody.text.toString())
+                else Snippets.update(this, existing.id, etTitle.text.toString(), etBody.text.toString())
+            }
+            .setNegativeButton(R.string.cancel, null).show()
+    }
+
+    private fun manageSnippetsDialog() {
+        val list = Snippets.list(this)
+        if (list.isEmpty()) { toast(R.string.no_snippets); return }
+        val items = list.map { s -> Triple(R.drawable.ic_delete, "${s.title}: ${s.body.take(28)}") { Snippets.delete(this, s.id) } }
+        sheet(getString(R.string.snippets), items)
+    }
+
     private fun menu() {
         val info = if (group) null else Names.info(this, address)
+        val archived = Archive.isArchived(this, thread)
+        val locked = ChatVault.isLockedThread(this, thread)
+        val blocked = Spam.isSpam(this, thread, address, "")
         sheet(if (group) Sms.groupName(this, members) else info?.name ?: address, listOf(
             Triple(R.drawable.ic_call, getString(R.string.call)) { Sahl.callVia(this, address) },
             Triple(R.drawable.ic_person_add, getString(R.string.add_contact)) {
@@ -286,6 +494,26 @@ class ThreadActivity : SahlActivity() {
             Triple(R.drawable.ic_bell, getString(if (Prefs.muted(this, thread)) R.string.unmute else R.string.mute)) { Prefs.toggleMute(this, thread) },
             Triple(R.drawable.ic_visibility_off, getString(if (Prefs.hiddenChat(this, thread)) R.string.show_previews else R.string.hide_previews)) {
                 Prefs.toggleHiddenChat(this, thread); toast(if (Prefs.hiddenChat(this, thread)) R.string.previews_hidden else R.string.previews_shown)
+            },
+            Triple(R.drawable.ic_history, getString(if (archived) R.string.unarchive else R.string.archive)) {
+                Archive.setArchived(this, listOf(thread), !archived)
+                toast(if (archived) R.string.unarchived_toast else R.string.archived_toast)
+                if (!archived) finish()
+            },
+            Triple(R.drawable.ic_lock, getString(if (locked) R.string.unlock_chat else R.string.lock_chat)) {
+                ChatVault.setLocked(this, listOf(thread), !locked)
+                toast(if (locked) R.string.unlocked_toast else R.string.locked_toast)
+                if (!locked) finish()
+            },
+            Triple(R.drawable.ic_block, getString(if (blocked) R.string.unblock else R.string.block_spam)) {
+                if (blocked) {
+                    Spam.unblock(this, thread, address)
+                    toast(R.string.unblocked_toast)
+                } else {
+                    Spam.block(this, thread, address)
+                    toast(R.string.blocked_moved_spam)
+                    finish()
+                }
             },
             Triple(R.drawable.ic_delete, getString(R.string.delete_chat)) {
                 AlertDialog.Builder(this).setMessage(R.string.delete_chat_q)
@@ -360,8 +588,10 @@ class ThreadActivity : SahlActivity() {
         val mine = m.outgoing
         if (group && !mine && m.from != null) outer.addView(text(Names.of(this, m.from).first ?: m.from, 12f, col(R.color.emerald), true).apply {
             setPaddingRelative(px(8), px(4), 0, px(2)) })
+        val isHi = highlightActive && ((m.id == highlightMsgId) || (matchIndex in matchPositions.indices && matchPositions[matchIndex] == p))
         val bubble = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; background = round(if (mine) col(R.color.emerald) else col(R.color.card), 18f)
+            orientation = LinearLayout.VERTICAL
+            background = round(if (mine) col(R.color.emerald) else col(R.color.card), 18f, if (isHi) col(R.color.gold) else 0)
             setPadding(px(6), px(6), px(6), px(6))
             setOnLongClickListener {
                 val items = mutableListOf<Triple<Int, String, () -> Unit>>()
@@ -382,7 +612,7 @@ class ThreadActivity : SahlActivity() {
             Thread { val b = Images.load(this, u, 700); runOnUiThread { iv.setImageBitmap(b) } }.start()
         }
         val fg = if (mine) 0xFFFFFFFF.toInt() else col(R.color.text)
-        if (m.text.isNotBlank()) bubble.addView(text(m.text, 16f, fg).apply {
+        if (m.text.isNotBlank()) bubble.addView(text(highlightText(m.text), 16f, fg).apply {
             autoLinkMask = Linkify.WEB_URLS or Linkify.PHONE_NUMBERS; setPadding(px(8), px(4), px(8), 0) })
         val status = when (m.box) { Telephony.Mms.MESSAGE_BOX_FAILED -> getString(R.string.failed_tap); Telephony.Mms.MESSAGE_BOX_OUTBOX -> getString(R.string.sending); else -> "" }
         bubble.addView(text(listOfNotNull(time(m.date), simLabel(m.subId), status.ifEmpty { null }).joinToString(" · "), 11f,
@@ -408,10 +638,12 @@ class ThreadActivity : SahlActivity() {
             }, LinearLayout.LayoutParams(-1, -2))
             val mine = m.outgoing
             val r = 20f
+            val isHi = highlightActive && ((m.id == highlightMsgId) || (matchIndex in matchPositions.indices && matchPositions[matchIndex] == p))
             val bubble = LinearLayout(this@ThreadActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 background = android.graphics.drawable.GradientDrawable().apply {
                     setColor(if (m.failed) col(R.color.danger) else if (mine) col(R.color.emerald) else col(R.color.card))
+                    if (isHi) setStroke(px(2), col(R.color.gold))
                     val small = 6f * dp; val big = r * dp
                     // Tail corner points toward the sender
                     val ltr = !rtl
@@ -422,7 +654,7 @@ class ThreadActivity : SahlActivity() {
                 setOnLongClickListener { msgActions(m); true }
             }
             val fg = if (mine || m.failed) 0xFFFFFFFF.toInt() else col(R.color.text)
-            bubble.addView(text(m.body, 16f, fg).apply {
+            bubble.addView(text(highlightText(m.body), 16f, fg).apply {
                 autoLinkMask = Linkify.WEB_URLS or Linkify.PHONE_NUMBERS or Linkify.EMAIL_ADDRESSES
                 setLinkTextColor(if (mine) 0xFFFFFFFF.toInt() else col(R.color.emerald))
                 setTextIsSelectable(false)
@@ -464,6 +696,12 @@ class ThreadActivity : SahlActivity() {
                     chip(R.drawable.ic_send, getString(R.string.track_x, tr.carrier)) {
                         try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(tr.url))) } catch (e: Exception) { }
                     }
+                }
+                Assist.iban(m.body)?.let { ib ->
+                    chip(R.drawable.ic_copy, getString(R.string.copy_iban)) { copy(ib) }
+                }
+                Assist.referenceNumber(m.body)?.let { ref ->
+                    chip(R.drawable.ic_copy, getString(R.string.copy_ref, ref)) { copy(ref) }
                 }
                 if (acts.childCount > 0) outer.addView(HorizontalScrollView(this@ThreadActivity).apply {
                     isHorizontalScrollBarEnabled = false; addView(acts) }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = px(4) })

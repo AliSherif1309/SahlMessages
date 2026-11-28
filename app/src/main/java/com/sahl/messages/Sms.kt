@@ -29,7 +29,7 @@ data class Conversation(val threadId: Long, val address: String, val snippet: St
                         val unread: Int, val outgoing: Boolean, val name: String?, val photo: String?,
                         val category: Int = Category.PERSONAL, val pinned: Boolean = false, val muted: Boolean = false,
                         val members: List<String> = emptyList(), val photoMsg: Boolean = false, val saved: Boolean = true,
-                        val subId: Int = -1) {
+                        val subId: Int = -1, val lookup: String? = null) {
     val group get() = members.size > 1
 }
 
@@ -44,13 +44,13 @@ data class Sim(val subId: Int, val label: String)
 
 /** Names come from Sahl Contacts (Sahl Union), Android contacts, or Sahl Phone's fetched caller names. */
 object Names {
-    data class Info(val name: String?, val photo: String?, val saved: Boolean)
+    data class Info(val name: String?, val photo: String?, val saved: Boolean, val lookup: String? = null)
     private val cache = ConcurrentHashMap<String, Info>()
     fun cachedInfo(number: String): Info = if (number.isBlank()) Info(null, null, false) else cache[number] ?: Info(null, null, false)
     fun cached(number: String): Pair<String?, String?> = cachedInfo(number).let { it.name to it.photo }
     fun seed(list: List<Conversation>) {
         for (c in list) if (!c.group && c.address.isNotBlank() && c.name != null && !cache.containsKey(c.address)) {
-            cache[c.address] = Info(c.name, c.photo, c.saved)
+            cache[c.address] = Info(c.name, c.photo, c.saved, c.lookup)
         }
     }
     fun info(c: Context, number: String): Info {
@@ -59,13 +59,13 @@ object Names {
         var r = Info(null, null, false)
         try {
             c.contentResolver.query(Uri.parse(Sahl.CONTACTS_UNION + "/lookup/" + Uri.encode(number)), null, null, null, null)?.use {
-                if (it.moveToFirst()) r = Info(it.getString(0), it.getString(2), true)
+                if (it.moveToFirst()) r = Info(it.getString(0), it.getString(2), true, it.getString(1))
             }
         } catch (e: Exception) { }
         if (r.name == null) try {
             c.contentResolver.query(Uri.withAppendedPath(PhoneLookup.CONTENT_FILTER_URI, Uri.encode(number)),
-                arrayOf(PhoneLookup.DISPLAY_NAME, PhoneLookup.PHOTO_THUMBNAIL_URI), null, null, null)?.use {
-                if (it.moveToFirst()) r = Info(it.getString(0), it.getString(1), true)
+                arrayOf(PhoneLookup.DISPLAY_NAME, PhoneLookup.PHOTO_THUMBNAIL_URI, PhoneLookup.LOOKUP_KEY), null, null, null)?.use {
+                if (it.moveToFirst()) r = Info(it.getString(0), it.getString(1), true, it.getString(2))
             }
         } catch (e: Exception) { }
         if (r.name == null) try {
@@ -97,7 +97,7 @@ object Sms {
         val a = org.json.JSONArray()
         for (cv in l.take(60)) a.put(org.json.JSONObject().put("t", cv.threadId).put("a", cv.address).put("s", cv.snippet).put("d", cv.date)
             .put("u", cv.unread).put("n", cv.name ?: "").put("p", cv.photo ?: "").put("c", cv.category).put("pin", cv.pinned).put("m", cv.muted)
-            .put("g", org.json.JSONArray(cv.members)).put("sub", cv.subId))
+            .put("g", org.json.JSONArray(cv.members)).put("sub", cv.subId).put("lk", cv.lookup ?: ""))
         Sahl.prefs(c).edit().putString("list_cache", a.toString()).apply()
     }
 
@@ -107,7 +107,7 @@ object Sms {
             val g = o.optJSONArray("g"); val members = if (g == null) emptyList() else (0 until g.length()).map { g.getString(it) }
             Conversation(o.getLong("t"), o.getString("a"), o.getString("s"), o.getLong("d"), o.getInt("u"), false,
                 o.getString("n").ifEmpty { null }, o.getString("p").ifEmpty { null }, o.getInt("c"), o.getBoolean("pin"), o.getBoolean("m"), members,
-                subId = o.optInt("sub", -1))
+                subId = o.optInt("sub", -1), lookup = o.optString("lk").ifEmpty { null })
         }
     } catch (e: Exception) { emptyList() }
 
@@ -178,7 +178,7 @@ object Sms {
                     category = if (members.size > 1) Category.PERSONAL else Category.of(members[0], snippet, saved),
                     pinned = Prefs.pinned(c, t), muted = Prefs.muted(c, t),
                     members = if (members.size > 1) members else emptyList(), photoMsg = snippet == photo, saved = saved,
-                    subId = threadSub[t] ?: -1))
+                    subId = threadSub[t] ?: -1, lookup = info?.lookup))
             }
         }
         // Clean up empty threads left behind by earlier getOrCreateThreadId lookups
@@ -222,11 +222,12 @@ object Sms {
             unread[t] = (unread[t] ?: 0) + (Mms.unreadCache[t] ?: 0)
         }
         return latest.values.map { cv ->
-            val (name, ph) = if (cv.group) groupName(c, cv.members, lookupContacts) to null
-                             else if (lookupContacts) Names.of(c, cv.address) else Names.cached(cv.address)
+            val info = if (cv.group) null else if (lookupContacts) Names.info(c, cv.address) else Names.cachedInfo(cv.address)
+            val name = if (cv.group) groupName(c, cv.members, lookupContacts) else info?.name
+            val ph = info?.photo
             cv.copy(unread = unread[cv.threadId] ?: 0, name = name, photo = ph,
                 category = if (cv.group) Category.PERSONAL else Category.of(cv.address, cv.snippet, name != null),
-                pinned = Prefs.pinned(c, cv.threadId), muted = Prefs.muted(c, cv.threadId))
+                pinned = Prefs.pinned(c, cv.threadId), muted = Prefs.muted(c, cv.threadId), lookup = info?.lookup)
         }.sortedWith(compareByDescending<Conversation> { it.pinned }.thenByDescending { it.date })
     }
 
@@ -421,7 +422,9 @@ class SmsDeliverReceiver : BroadcastReceiver() {
                     put(Telephony.Sms.READ, 0); put(Telephony.Sms.SEEN, 0)
                     if (sub >= 0) put(Telephony.Sms.SUBSCRIPTION_ID, sub)
                 })
-                if (!Guard.blocked(c, address) && !Prefs.muted(c, Sms.threadFor(c, address))) Notify.message(c, address, body, subId = sub)
+                val tid = Sms.threadFor(c, address)
+                Archive.unarchive(c, tid)
+                if (!Spam.isSpam(c, tid, address, body) && !Prefs.muted(c, tid)) Notify.message(c, address, body, threadId = tid, subId = sub)
             } catch (e: Exception) { } finally { pending.finish() }
         }.start()
     }
@@ -565,7 +568,7 @@ object Notify {
         else if (Prefs.hidden(c, thread)) b.addAction(action(w.getString(R.string.hide), 4, "hide"))
         b.addAction(reply)
         val code = Sms.otp(body)
-        if (code != null) b.addAction(action(if (hidden) w.getString(R.string.copy_code_hidden) else w.getString(R.string.copy_code, code), 2, "copy") { putExtra("code", code) })
+        if (code != null) b.addAction(action(if (hidden) w.getString(R.string.copy_code_hidden) else w.getString(R.string.copy_code_read, code), 2, "copy") { putExtra("code", code) })
         b.addAction(action(w.getString(R.string.mark_read), 1, "read", Notification.Action.SEMANTIC_ACTION_MARK_AS_READ))
         c.getSystemService(NotificationManager::class.java)?.notify(id, b.build())
     }

@@ -89,6 +89,22 @@ object Assist {
         return Track(c.first.replaceFirstChar { it.uppercase() }, n.uppercase(), c.second.format(n.uppercase()))
     }
 
+    // ---------- Financial chips: IBAN & Reference # ----------
+    fun iban(body: String): String? {
+        val m = Regex("\\b([A-Z]{2}\\d{2}(?:[ \\-]?[A-Z0-9]){11,30})\\b", RegexOption.IGNORE_CASE).find(body) ?: return null
+        val cleaned = m.groupValues[1].replace(" ", "").replace("-", "").uppercase()
+        return if (cleaned.length in 15..34 && cleaned.count { it.isDigit() } >= 6) cleaned else null
+    }
+
+    fun referenceNumber(body: String): String? {
+        val m = Regex("(?:ref(?:erence)?|txn|trans(?:action)?|order|receipt|confirmation|auth(?:\\s*code)?|رقم\\s*(?:المرجع|العملية|الطلب|الإيصال|الايصال))\\s*(?:no\\.?|number|#|:)?\\s*([A-Za-z0-9\\-]{5,24})", RegexOption.IGNORE_CASE)
+            .find(body) ?: return null
+        val raw = m.groupValues[1].trim('-')
+        if (raw.none { it.isDigit() }) return null
+        if (Sms.otp(body) == raw) return null
+        return raw
+    }
+
     // ---------- Unknown sender check ----------
     private val scamWords = Regex("(verify|suspend|blocked|locked|urgent|prize|winner|won|claim|reward|update your|confirm your|click|refund|parcel.*fee|" +
         "حسابك|موقوف|ايقاف|تحديث بيانات|جائزه|ربحت|فزت|اضغط|رابط|استرداد|رسوم)")

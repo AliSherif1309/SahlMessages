@@ -12,6 +12,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Telephony
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.BackgroundColorSpan
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -43,7 +47,18 @@ class MainActivity : SahlActivity() {
     private lateinit var normalHeader: View
     private lateinit var selectBar: LinearLayout
     private lateinit var selectTitle: TextView
+    private lateinit var folderBar: LinearLayout
+    private lateinit var folderTitle: TextView
+    private lateinit var folderAction: TextView
+    private lateinit var chipsScroll: HorizontalScrollView
+    private lateinit var datesScroll: HorizontalScrollView
+    private lateinit var bankCard: LinearLayout
     private lateinit var fabView: View
+    private var folder = 0                       // 0 inbox · 1 archived · 2 spam · 3 locked
+    private var bankExpanded = false
+    private var lastBankReport: BankReport? = null
+    private var hiddenLookups: Set<String> = emptySet()
+    private var searchMatches: Map<Long, Pair<Long, String>> = emptyMap()
 
     private val perms = arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_SMS,
         Manifest.permission.READ_CONTACTS, Manifest.permission.READ_PHONE_STATE)
@@ -80,14 +95,37 @@ class MainActivity : SahlActivity() {
             addView(iconButton(R.drawable.ic_more, 0, col(R.color.text), 44, 22) { selectionMenu() })
         }
         root.addView(selectBar)
+        folderBar = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(col(R.color.card))
+            setPadding(px(8), px(8), px(12), px(8))
+            visibility = View.GONE
+            addView(iconButton(R.drawable.ic_back, 0, col(R.color.text), 42, 22) { setFolder(0) })
+            folderTitle = text("", 18f, col(R.color.text), true).apply { setPaddingRelative(px(6), 0, 0, 0) }
+            addView(folderTitle, LinearLayout.LayoutParams(0, -2, 1f))
+            folderAction = text("", 13f, col(R.color.emerald), true).apply {
+                background = round(col(R.color.tonal), 14f)
+                setPadding(px(12), px(6), px(12), px(6))
+                visibility = View.GONE
+            }.press(14f)
+            addView(folderAction)
+        }
+        root.addView(folderBar)
         banner = card().apply { background = round(col(R.color.tonal), 22f); elevation = 0f }
         root.addView(banner, LinearLayout.LayoutParams(-1, -2).apply { setMargins(px(16), px(4), px(16), px(6)) })
         val (search, _) = searchBox(getString(R.string.search)) { query = it; filter() }
         root.addView(search, LinearLayout.LayoutParams(-1, -2).apply { setMargins(px(16), px(2), px(16), px(6)) })
         chips = LinearLayout(this).apply { setPaddingRelative(px(16), px(2), px(16), px(6)) }
-        root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) })
+        chipsScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) }
+        root.addView(chipsScroll)
         dates = LinearLayout(this).apply { setPaddingRelative(px(16), 0, px(16), px(6)) }
-        root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(dates) })
+        datesScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(dates) }
+        root.addView(datesScroll)
+        bankCard = card().apply {
+            background = round(col(R.color.card), 20f, col(R.color.line))
+            visibility = View.GONE
+        }
+        root.addView(bankCard, LinearLayout.LayoutParams(-1, -2).apply { setMargins(px(16), px(2), px(16), px(6)) })
         val body = FrameLayout(this)
         list = ListView(this).apply {
             divider = null; selector = android.graphics.drawable.ColorDrawable(0); clipToPadding = false; setPadding(0, 0, 0, px(96))
@@ -125,7 +163,9 @@ class MainActivity : SahlActivity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        if (selecting) clearSelection() else super.onBackPressed()
+        if (selecting) clearSelection()
+        else if (folder != 0) setFolder(0)
+        else super.onBackPressed()
     }
 
     private fun askPermissions() {
@@ -141,6 +181,18 @@ class MainActivity : SahlActivity() {
     @Deprecated("Activity result")
     override fun onActivityResult(req: Int, res: Int, data: Intent?) {
         super.onActivityResult(req, res, data); renderBanner()
+        if (req == 70 && res == RESULT_OK) {
+            val uri = data?.data ?: return
+            val report = lastBankReport ?: return
+            Thread {
+                val ok = try {
+                    contentResolver.openOutputStream(uri)?.use { it.write(BankSummary.toCsv(report).toByteArray(Charsets.UTF_8)) }
+                    true
+                } catch (_: Exception) { false }
+                runOnUiThread { if (ok) toast(R.string.csv_exported) else toast(R.string.backup_failed) }
+            }.start()
+            return
+        }
         // Android blocks SMS for apps installed from a file until "restricted settings" are allowed
         if (req == 5 && !Sms.isDefault(this)) restrictedHelp() else if (!granted()) askPermissions()
     }
@@ -247,6 +299,7 @@ class MainActivity : SahlActivity() {
             renderChips(); filter()
         }
         Thread {
+            hiddenLookups = ChatVault.contactsVaultLookups(this)
             // 1. Fast pass: load latest conversations using already-cached contact names so new messages show immediately
             val fast = try { Sms.conversations(this, lookupContacts = false) } catch (e: Exception) { emptyList() }
             if (fast.isNotEmpty()) runOnUiThread { all = fast; renderChips(); filter() }
@@ -259,32 +312,152 @@ class MainActivity : SahlActivity() {
         }.start()
     }
 
+    private fun bucketOf(cv: Conversation): Int = when {
+        ChatVault.isLocked(this, cv.threadId, cv.lookup, hiddenLookups) -> 3
+        Spam.isSpam(this, cv.threadId, cv.address, cv.snippet) -> 2
+        Archive.isArchived(this, cv.threadId) -> 1
+        else -> 0
+    }
+
+    private fun setFolder(f: Int) {
+        if (f == 3 && !ChatVault.unlocked()) {
+            ChatVault.unlock(this) { setFolder(3) }
+            return
+        }
+        folder = f
+        clearSelection()
+        syncSelectionChrome()
+        filter()
+    }
+
     private fun filter() {
         val words = Norm.text(query).split(' ').filter { it.isNotBlank() }
         val dq = Norm.digits(query)
-        shown = all.filter { cv ->
-            (!unreadOnly || cv.unread > 0) && (cat == -1 || cv.category == cat) && (dateThreads?.contains(cv.threadId) ?: true) && (words.isEmpty() || words.all { w ->
-                Norm.text(cv.name ?: "").contains(w) || Norm.text(cv.snippet).contains(w) } || (dq.length >= 3 && Norm.digits(cv.address).contains(dq)))
+        val inFolder = all.filter { bucketOf(it) == folder }
+        shown = inFolder.filter { cv ->
+            (folder != 0 || ((!unreadOnly || cv.unread > 0) && (cat == -1 || cv.category == cat) && (dateThreads?.contains(cv.threadId) ?: true))) &&
+                (words.isEmpty() || words.all { w ->
+                    Norm.text(cv.name ?: "").contains(w) || Norm.text(cv.snippet).contains(w)
+                } || (dq.length >= 3 && Norm.digits(cv.address).contains(dq)))
         }
-        // Search inside every message too
-        if (words.isNotEmpty() && query.length >= 2) {
-            val extra = deepSearch(query).filter { t -> shown.none { it.threadId == t } }
-            if (extra.isNotEmpty()) shown = shown + all.filter { it.threadId in extra }
-        }
+        // Search inside every message too (and remember matched message ID/body for jump + snippet)
+        searchMatches = if (words.isNotEmpty() && query.length >= 2) {
+            val matches = deepSearch(query)
+            val extraIds = matches.keys.filter { t -> shown.none { it.threadId == t } }.toSet()
+            if (extraIds.isNotEmpty()) shown = shown + inFolder.filter { it.threadId in extraIds }
+            matches
+        } else emptyMap()
         val validIds = all.map { it.threadId }.toSet()
         selected.retainAll(validIds)
         syncSelectionChrome()
+        refreshBankSummary()
         adapter.notifyDataSetChanged()
         empty.visibility = if (shown.isEmpty() && granted()) View.VISIBLE else View.GONE
     }
 
-    private fun deepSearch(q: String): Set<Long> = try {
-        val out = HashSet<Long>()
-        contentResolver.query(Telephony.Sms.CONTENT_URI, arrayOf(Telephony.Sms.THREAD_ID), "${Telephony.Sms.BODY} LIKE ?", arrayOf("%$q%"), null)?.use {
-            while (it.moveToNext() && out.size < 50) out.add(it.getLong(0))
+    private fun deepSearch(q: String): Map<Long, Pair<Long, String>> = try {
+        val out = LinkedHashMap<Long, Pair<Long, String>>()
+        contentResolver.query(
+            Telephony.Sms.CONTENT_URI,
+            arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.BODY),
+            "${Telephony.Sms.BODY} LIKE ?",
+            arrayOf("%$q%"),
+            "${Telephony.Sms.DATE} DESC"
+        )?.use {
+            while (it.moveToNext() && out.size < 60) {
+                val tid = it.getLong(1)
+                if (tid !in out) out[tid] = it.getLong(0) to (it.getString(2) ?: "")
+            }
         }
         out
-    } catch (e: Exception) { emptySet() }
+    } catch (e: Exception) { emptyMap() }
+
+    private fun refreshBankSummary() {
+        if (folder != 0 || cat != Category.BANKS || !granted()) {
+            bankCard.visibility = View.GONE
+            return
+        }
+        val bankConvs = all.filter { bucketOf(it) == 0 && it.category == Category.BANKS }
+        if (bankConvs.isEmpty()) {
+            bankCard.visibility = View.GONE
+            return
+        }
+        Thread {
+            val report = BankSummary.analyze(this, bankConvs)
+            runOnUiThread {
+                if (folder == 0 && cat == Category.BANKS) renderBankCard(report)
+            }
+        }.start()
+    }
+
+    private fun renderBankCard(report: BankReport) {
+        lastBankReport = report
+        bankCard.removeAllViews()
+        bankCard.visibility = View.VISIBLE
+        val headerRow = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener { bankExpanded = !bankExpanded; renderBankCard(report) }
+        }
+        headerRow.addView(icon(R.drawable.ic_work, col(R.color.emerald), 20))
+        val spendStr = report.monthSpend.entries.joinToString(" · ") { BankSummary.formatMoney(it.key, it.value) }
+            .ifEmpty { getString(R.string.no_bank_tx) }
+        val hdrText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPaddingRelative(px(10), 0, px(8), 0) }
+        hdrText.addView(text(getString(R.string.bank_summary), 14f, col(R.color.emerald), true))
+        hdrText.addView(text("${getString(R.string.this_month_spend)}: $spendStr", 13f, col(R.color.text), true).apply {
+            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+        })
+        headerRow.addView(hdrText, LinearLayout.LayoutParams(0, -2, 1f))
+        headerRow.addView(text(if (bankExpanded) "▲" else "▼", 13f, col(R.color.sub), true).apply { setPadding(px(6), 0, px(2), 0) })
+        bankCard.addView(headerRow)
+
+        if (!bankExpanded) return
+
+        if (report.monthCredit.isNotEmpty()) {
+            val credStr = report.monthCredit.entries.joinToString(" · ") { BankSummary.formatMoney(it.key, it.value) }
+            bankCard.addView(text("${getString(R.string.this_month_credit)}: $credStr", 12.5f, col(R.color.ok), true).apply {
+                setPadding(0, px(8), 0, 0)
+            })
+        }
+        if (report.balances.isNotEmpty()) {
+            bankCard.addView(text(getString(R.string.latest_balances), 12f, col(R.color.sub), true).apply { setPadding(0, px(8), 0, px(2)) })
+            for (b in report.balances.take(4)) {
+                val r = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, px(2), 0, px(2)) }
+                r.addView(text(b.bank, 13f, col(R.color.text)).apply { maxLines = 1 }, LinearLayout.LayoutParams(0, -2, 1f))
+                r.addView(text(BankSummary.formatMoney(b.currency, b.balance), 13f, col(R.color.emerald), true))
+                bankCard.addView(r)
+            }
+        }
+        if (report.recent.isNotEmpty()) {
+            bankCard.addView(text(getString(R.string.recent_transactions), 12f, col(R.color.sub), true).apply { setPadding(0, px(8), 0, px(2)) })
+            for (tx in report.recent.take(5)) {
+                val r = LinearLayout(this).apply {
+                    gravity = Gravity.CENTER_VERTICAL; setPadding(0, px(4), 0, px(4))
+                    setOnClickListener {
+                        all.firstOrNull { it.threadId == tx.threadId }?.let { open(it) }
+                    }
+                }.press(10f)
+                r.addView(text(tx.merchant, 13f, col(R.color.text)).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END },
+                    LinearLayout.LayoutParams(0, -2, 1f))
+                val sign = if (tx.isDebit) "-" else "+"
+                r.addView(text("$sign${BankSummary.formatMoney(tx.currency, tx.amount)}", 13f,
+                    col(if (tx.isDebit) R.color.danger else R.color.ok), true))
+                bankCard.addView(r)
+            }
+            bankCard.addView(text(getString(R.string.export_csv), 13f, 0xFFFFFFFF.toInt(), true).apply {
+                gravity = Gravity.CENTER
+                background = round(col(R.color.emerald), 14f)
+                setPadding(px(14), px(8), px(14), px(8))
+                setOnClickListener {
+                    try {
+                        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT)
+                            .addCategory(Intent.CATEGORY_OPENABLE)
+                            .setType("text/csv")
+                            .putExtra(Intent.EXTRA_TITLE, "SahlBankSummary-" + java.time.LocalDate.now() + ".csv"), 70)
+                    } catch (_: Exception) { }
+                }
+            }.press(14f), LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(8) })
+        }
+    }
 
     private fun markReadLocally(threadId: Long) = markReadLocally(setOf(threadId))
 
@@ -296,16 +469,44 @@ class MainActivity : SahlActivity() {
 
     private fun open(cv: Conversation) {
         if (cv.unread > 0 && Sms.isDefault(this)) markReadLocally(cv.threadId)
-        startActivity(Intent(this, ThreadActivity::class.java).putExtra("thread", cv.threadId)
-            .putExtra("address", if (cv.group) cv.members.joinToString(",") else cv.address))
+        val i = Intent(this, ThreadActivity::class.java).putExtra("thread", cv.threadId)
+            .putExtra("address", if (cv.group) cv.members.joinToString(",") else cv.address)
+        searchMatches[cv.threadId]?.let { (msgId, _) ->
+            i.putExtra("highlight_msg_id", msgId)
+            if (query.isNotBlank()) i.putExtra("search_query", query)
+        }
+        startActivity(i)
     }
 
     private fun syncSelectionChrome() {
         val on = selecting
-        normalHeader.visibility = if (on) View.GONE else View.VISIBLE
+        normalHeader.visibility = if (on || folder != 0) View.GONE else View.VISIBLE
         selectBar.visibility = if (on) View.VISIBLE else View.GONE
-        fabView.visibility = if (on) View.GONE else View.VISIBLE
+        folderBar.visibility = if (!on && folder != 0) View.VISIBLE else View.GONE
+        chipsScroll.visibility = if (folder == 0) View.VISIBLE else View.GONE
+        datesScroll.visibility = if (folder == 0) View.VISIBLE else View.GONE
+        fabView.visibility = if (on || folder != 0) View.GONE else View.VISIBLE
         if (on) selectTitle.text = getString(R.string.selected_count, selected.size)
+        if (!on && folder != 0) {
+            folderTitle.text = when (folder) {
+                1 -> getString(R.string.archived)
+                2 -> getString(R.string.spam_blocked)
+                else -> getString(R.string.locked_chats)
+            }
+            when (folder) {
+                2 -> {
+                    folderAction.visibility = View.VISIBLE
+                    folderAction.text = getString(R.string.rules)
+                    folderAction.setOnClickListener { startActivity(Intent(this, SpamRulesActivity::class.java)) }
+                }
+                3 -> {
+                    folderAction.visibility = View.VISIBLE
+                    folderAction.text = getString(R.string.lock_now)
+                    folderAction.setOnClickListener { ChatVault.lock(); setFolder(0) }
+                }
+                else -> folderAction.visibility = View.GONE
+            }
+        }
     }
 
     private fun updateSelectionUi() {
@@ -331,12 +532,22 @@ class MainActivity : SahlActivity() {
     private fun selectedConversations(): List<Conversation> = all.filter { it.threadId in selected }
 
     private fun overflowMenu() {
+        val archCount = all.count { bucketOf(it) == 1 }
+        val spamCount = all.count { bucketOf(it) == 2 }
+        val lockCount = all.count { bucketOf(it) == 3 }
+        val schedCount = Scheduled.all(this).size
         val items = mutableListOf(
             Triple(R.drawable.ic_check, getString(R.string.mark_all_read)) { markAllRead() }
         )
         if (shown.isNotEmpty()) {
             items.add(Triple(R.drawable.ic_chat, getString(R.string.select_all)) { selectAllShown() })
         }
+        items.add(Triple(R.drawable.ic_history, getString(R.string.archived) + if (archCount > 0) " ($archCount)" else "") { setFolder(1) })
+        items.add(Triple(R.drawable.ic_block, getString(R.string.spam_blocked) + if (spamCount > 0) " ($spamCount)" else "") { setFolder(2) })
+        items.add(Triple(R.drawable.ic_lock, getString(R.string.locked_chats) + if (lockCount > 0) " ($lockCount)" else "") { setFolder(3) })
+        items.add(Triple(R.drawable.ic_history, getString(R.string.scheduled_messages) + if (schedCount > 0) " ($schedCount)" else "") {
+            startActivity(Intent(this, ScheduledActivity::class.java))
+        })
         sheet(null, items)
     }
 
@@ -394,6 +605,33 @@ class MainActivity : SahlActivity() {
         clearSelection()
     }
 
+    private fun archiveSelected(on: Boolean) {
+        val ids = selected.toSet()
+        Archive.setArchived(this, ids, on)
+        toast(if (on) R.string.archived_toast else R.string.unarchived_toast)
+        clearSelection()
+        filter()
+    }
+
+    private fun blockSelected(block: Boolean) {
+        val cvs = selectedConversations()
+        for (cv in cvs) {
+            if (block) Spam.block(this, cv.threadId, cv.address)
+            else Spam.unblock(this, cv.threadId, cv.address)
+        }
+        toast(if (block) R.string.blocked_moved_spam else R.string.unblocked_toast)
+        clearSelection()
+        filter()
+    }
+
+    private fun lockSelected(lock: Boolean) {
+        val ids = selected.toSet()
+        ChatVault.setLocked(this, ids, lock)
+        toast(if (lock) R.string.locked_toast else R.string.unlocked_toast)
+        clearSelection()
+        filter()
+    }
+
     private fun deleteSelected() {
         val ids = selected.toSet()
         val msg = if (ids.size == 1) getString(R.string.delete_chat_q) else getString(R.string.delete_chats_q, ids.size)
@@ -420,11 +658,37 @@ class MainActivity : SahlActivity() {
             Triple(R.drawable.ic_bell, getString(if (cvs.any { !it.muted }) R.string.mute else R.string.unmute)) { toggleMuteSelected() },
             Triple(R.drawable.ic_visibility_off, getString(if (selected.any { !Prefs.hiddenChat(this, it) }) R.string.hide_previews else R.string.show_previews)) { toggleHiddenSelected() }
         )
+        items.add(Triple(R.drawable.ic_history, getString(if (folder == 1) R.string.unarchive else R.string.archive)) {
+            archiveSelected(folder != 1)
+        })
+        items.add(Triple(R.drawable.ic_block, getString(if (folder == 2) R.string.unblock else R.string.block_spam)) {
+            blockSelected(folder != 2)
+        })
+        items.add(Triple(R.drawable.ic_lock, getString(if (folder == 3) R.string.unlock_chat else R.string.lock_chat)) {
+            lockSelected(folder != 3)
+        })
         if (cvs.size == 1) {
             items.add(Triple(R.drawable.ic_call, getString(R.string.call)) { Sahl.callVia(this, cvs[0].address); clearSelection() })
         }
         items.add(Triple(R.drawable.ic_delete, getString(R.string.delete_chat)) { deleteSelected() })
         sheet(getString(R.string.selected_count, selected.size), items)
+    }
+
+    private fun highlightSearch(text: String): CharSequence {
+        val q = query.trim()
+        if (q.length < 2) return text
+        val sp = SpannableString(text)
+        val lt = text.lowercase()
+        val lq = q.lowercase()
+        var idx = lt.indexOf(lq)
+        val bg = col(R.color.gold)
+        val fg = 0xFF1B2A26.toInt()
+        while (idx >= 0) {
+            sp.setSpan(BackgroundColorSpan(bg), idx, idx + lq.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sp.setSpan(ForegroundColorSpan(fg), idx, idx + lq.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            idx = lt.indexOf(lq, idx + lq.length)
+        }
+        return sp
     }
 
     private fun stamp(t: Long): String {
@@ -502,7 +766,19 @@ class MainActivity : SahlActivity() {
                     }
                 }
             }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = px(6) }) }
-            bottom.addView(text((if (c.outgoing) getString(R.string.you) + " " else "") + c.snippet.replace('\n', ' '), 14f,
+            val matchedBody = searchMatches[c.threadId]?.second?.replace('\n', ' ')
+            val draft = if (matchedBody == null) Drafts.get(this@MainActivity, c.threadId, c.address).trim().replace('\n', ' ') else ""
+            val snippetText: CharSequence = when {
+                matchedBody != null -> highlightSearch(matchedBody)
+                draft.isNotEmpty() -> {
+                    val prefix = getString(R.string.draft_prefix)
+                    SpannableString(prefix + draft).apply {
+                        setSpan(ForegroundColorSpan(col(R.color.danger)), 0, prefix.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                }
+                else -> (if (c.outgoing) getString(R.string.you) + " " else "") + c.snippet.replace('\n', ' ')
+            }
+            bottom.addView(text(snippetText, 14f,
                 if (bold) col(R.color.text) else col(R.color.sub)).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, px(2), 0, 0) },
                 LinearLayout.LayoutParams(0, -2, 1f))
             if (bold) bottom.addView(text(c.unread.toString(), 11f, 0xFFFFFFFF.toInt(), true).apply {
@@ -511,12 +787,24 @@ class MainActivity : SahlActivity() {
             t.addView(bottom)
             row.addView(t, LinearLayout.LayoutParams(0, -2, 1f))
             if (selecting) return row
+            val leftIcon = if (c.unread > 0 || folder != 0) R.drawable.ic_check else R.drawable.ic_history
+            val leftCol = if (c.unread > 0 || folder != 0) col(R.color.emerald) else col(R.color.gold)
             return SwipeRow(this@MainActivity, row, col(R.color.bg),
                 R.drawable.ic_call, col(R.color.ok), { Sahl.callVia(this@MainActivity, c.address) },
-                R.drawable.ic_check, col(R.color.emerald), {
-                    if (!Sms.isDefault(this@MainActivity)) { toast(R.string.make_default); return@SwipeRow }
-                    markReadLocally(c.threadId)
-                    Thread { Sms.markRead(this@MainActivity, c.threadId) }.start()
+                leftIcon, leftCol, {
+                    if (c.unread > 0) {
+                        if (!Sms.isDefault(this@MainActivity)) { toast(R.string.make_default); return@SwipeRow }
+                        markReadLocally(c.threadId)
+                        Thread { Sms.markRead(this@MainActivity, c.threadId) }.start()
+                    } else if (folder == 0) {
+                        Archive.setArchived(this@MainActivity, listOf(c.threadId), true)
+                        toast(R.string.archived_toast)
+                        filter()
+                    } else if (folder == 1) {
+                        Archive.setArchived(this@MainActivity, listOf(c.threadId), false)
+                        toast(R.string.unarchived_toast)
+                        filter()
+                    }
                 })
         }
     }
