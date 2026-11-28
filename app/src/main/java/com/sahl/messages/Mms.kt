@@ -232,7 +232,8 @@ object Mms {
             }
         }
         val who = if (members.size > 1) Names.of(c, from).first ?: from else from
-        if (!Guard.blocked(c, from) && !Prefs.muted(c, thread))
+        Archive.unarchive(c, thread)
+        if (!Spam.isSpam(c, thread, from, text) && !Prefs.muted(c, thread))
             Notify.message(c, from, if (text.isNotBlank()) text else Sahl.wrap(c).getString(R.string.photo), thread, if (members.size > 1) who else null, subId = sub)
     }
 

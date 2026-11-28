@@ -33,11 +33,15 @@ object Prefs {
     fun deliveryReports(c: Context) = Sahl.prefs(c).getBoolean("delivery", true)
     fun undoSend(c: Context) = Sahl.prefs(c).getBoolean("undo_send", true)
     fun cleanCodes(c: Context) = Sahl.prefs(c).getBoolean("clean_codes", false)
+    fun cleanCodesHours(c: Context): Int {
+        val h = Sahl.prefs(c).getInt("otp_clean_hours", -1)
+        return if (h >= 0) h else if (cleanCodes(c)) 24 else 0
+    }
     /** Hide message text in notifications (for everyone, or just some chats). */
     fun hideAll(c: Context) = Sahl.prefs(c).getBoolean("hide_previews", false)
     fun hiddenChat(c: Context, thread: Long) = thread.toString() in set(c, "hidden_chats")
     fun toggleHiddenChat(c: Context, thread: Long) = toggle(c, "hidden_chats", thread)
-    fun hidden(c: Context, thread: Long) = hideAll(c) || hiddenChat(c, thread)
+    fun hidden(c: Context, thread: Long) = hideAll(c) || hiddenChat(c, thread) || ChatVault.isLockedThread(c, thread)
 }
 
 /** Smart inbox: sorts conversations into Personal, Codes, Banks and Offers. */
@@ -82,6 +86,15 @@ object Scheduled {
         c.getSystemService(AlarmManager::class.java)?.cancel(pi(c, id))
     }
 
+    fun update(c: Context, id: Long, newBody: String, newAt: Long) {
+        val b = newBody.trim()
+        if (b.isEmpty()) return
+        c.getSystemService(AlarmManager::class.java)?.cancel(pi(c, id))
+        save(c, all(c).map { if (it.id == id) it.copy(body = b, at = newAt) else it })
+        val am = c.getSystemService(AlarmManager::class.java) ?: return
+        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, newAt, pi(c, id))
+    }
+
     private fun pi(c: Context, id: Long) = PendingIntent.getBroadcast(c, (id % 1_000_000).toInt(),
         Intent(c, ScheduledReceiver::class.java).putExtra("id", id), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
@@ -112,11 +125,13 @@ class DeliveredReceiver : BroadcastReceiver() {
 /** Optional: remove one-time codes older than a day, to keep the inbox clean. */
 object Cleanup {
     fun run(c: Context) {
-        if (!Prefs.cleanCodes(c) || !Sms.isDefault(c)) return
+        val hours = Prefs.cleanCodesHours(c)
+        if (hours <= 0 || !Sms.isDefault(c)) return
         val p = Sahl.prefs(c)
-        if (System.currentTimeMillis() - p.getLong("last_clean", 0) < 6 * 3600_000L) return
+        val interval = if (hours <= 1) 30 * 60_000L else 6 * 3600_000L
+        if (System.currentTimeMillis() - p.getLong("last_clean", 0) < interval) return
         p.edit().putLong("last_clean", System.currentTimeMillis()).apply()
-        val cutoff = System.currentTimeMillis() - 24 * 3600_000L
+        val cutoff = System.currentTimeMillis() - hours * 3600_000L
         val ids = ArrayList<Long>()
         try {
             c.contentResolver.query(Telephony.Sms.Inbox.CONTENT_URI, arrayOf(Telephony.Sms._ID, Telephony.Sms.BODY),

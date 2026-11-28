@@ -48,8 +48,32 @@ class SettingsActivity : SahlActivity() {
         sw(R.string.set_hide, "hide_previews", false)
         sw(R.string.set_undo, "undo_send", true)
         sw(R.string.set_delivery, "delivery", true)
-        sw(R.string.set_clean, "clean_codes", false)
         sw(R.string.set_prayer_silence, "prayer_silence", false)
+        sw(R.string.set_align_vault, "align_contacts_vault", true)
+
+        sm.addView(text(getString(R.string.otp_auto_delete), 14f, col(R.color.emerald), true).apply { setPadding(0, px(10), 0, px(4)) })
+        val otpOpts = listOf(0 to R.string.otp_off, 1 to R.string.otp_1h, 24 to R.string.otp_24h)
+        val curOtp = Prefs.cleanCodesHours(this)
+        val otpGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        otpOpts.forEachIndexed { i, (hrs, lbl) ->
+            otpGroup.addView(RadioButton(this).apply {
+                id = 2000 + i; text = getString(lbl); typeface = font; setTextColor(col(R.color.text))
+                isChecked = hrs == curOtp; setPaddingRelative(0, 0, px(10), 0)
+            })
+        }
+        otpGroup.setOnCheckedChangeListener { _, checkedId ->
+            val hrs = otpOpts[checkedId - 2000].first
+            p.edit().putInt("otp_clean_hours", hrs).putBoolean("clean_codes", hrs > 0).apply()
+        }
+        sm.addView(otpGroup)
+        sm.addView(Button(this).apply {
+            text = getString(R.string.spam_rules); typeface = font
+            setOnClickListener { startActivity(Intent(this@SettingsActivity, SpamRulesActivity::class.java)) }
+        })
+        sm.addView(Button(this).apply {
+            text = getString(R.string.scheduled_messages); typeface = font
+            setOnClickListener { startActivity(Intent(this@SettingsActivity, ScheduledActivity::class.java)) }
+        })
 
         val bk = card(R.string.backup)
         bk.addView(text(getString(R.string.backup_hint), 12f, col(R.color.sub)))
