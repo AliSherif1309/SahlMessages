@@ -13,17 +13,34 @@ import org.json.JSONObject
 
 /** Built-in spam folder, sender blocking, custom keyword rules & Sahl Tools Call Guard sync. */
 object Spam {
+    @Volatile private var blockedCache: Set<String>? = null
+    @Volatile private var spamThreadsCache: Set<String>? = null
+    @Volatile private var rulesCache: List<String>? = null
+    @Volatile private var rulesNormCache: List<String>? = null
+    private val guardCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
     private fun set(c: Context, k: String): Set<String> = Sahl.prefs(c).getStringSet(k, null)?.toSet() ?: emptySet()
 
-    fun blockedSenders(c: Context): Set<String> = set(c, "blocked_senders")
-    fun spamThreads(c: Context): Set<String> = set(c, "spam_threads")
+    fun blockedSenders(c: Context): Set<String> = blockedCache ?: set(c, "blocked_senders").also { blockedCache = it }
+    fun spamThreads(c: Context): Set<String> = spamThreadsCache ?: set(c, "spam_threads").also { spamThreadsCache = it }
 
-    fun rules(c: Context): List<String> = try {
-        val a = JSONArray(Sahl.prefs(c).getString("spam_rules", "[]"))
+    fun rules(c: Context): List<String> = rulesCache ?: try {
+        val a = JSONArray(Sahl.prefs(c).getString("spam_rules", "[]") ?: "[]")
         (0 until a.length()).map { a.getString(it) }.filter { it.isNotBlank() }
-    } catch (_: Exception) { emptyList() }
+    } catch (_: Exception) { emptyList() }.also {
+        rulesCache = it
+        rulesNormCache = it.map { r -> Norm.text(r) }.filter { nr -> nr.isNotEmpty() }
+    }
+
+    private fun rulesNorm(c: Context): List<String> {
+        rulesNormCache?.let { return it }
+        val rs = rules(c)
+        return rs.map { Norm.text(it) }.filter { it.isNotEmpty() }.also { rulesNormCache = it }
+    }
 
     private fun saveRules(c: Context, list: List<String>) {
+        rulesCache = list
+        rulesNormCache = list.map { Norm.text(it) }.filter { it.isNotEmpty() }
         Sahl.prefs(c).edit().putString("spam_rules", JSONArray(list).toString()).apply()
     }
 
@@ -55,32 +72,62 @@ object Spam {
     fun isSpamThread(c: Context, threadId: Long): Boolean = threadId.toString() in spamThreads(c)
 
     fun matchesRule(c: Context, address: String, body: String): Boolean {
-        val rs = rules(c)
+        val rs = rulesNorm(c)
         if (rs.isEmpty()) return false
         val na = Norm.text(address)
         val nb = Norm.text(body)
-        return rs.any { r ->
-            val nr = Norm.text(r)
-            nr.isNotEmpty() && (na.contains(nr) || nb.contains(nr))
+        return rs.any { nr -> na.contains(nr) || nb.contains(nr) }
+    }
+
+    fun isGuardBlockedCached(address: String): Boolean {
+        val k = senderKey(address)
+        return k.isNotEmpty() && guardCache[k] == true
+    }
+
+    /** Background-thread only: warms Call Guard lookup cache without blocking the UI thread. */
+    fun warmGuardCache(c: Context, addresses: Collection<String>) {
+        val app = c.applicationContext
+        for (addr in addresses) {
+            if (addr.isBlank()) continue
+            val k = senderKey(addr)
+            if (k.isEmpty() || guardCache.containsKey(k)) continue
+            guardCache[k] = Guard.blocked(app, addr)
         }
     }
 
-    fun isSpam(c: Context, threadId: Long, address: String, body: String): Boolean =
-        isSpamThread(c, threadId) || isBlockedSender(c, address) || matchesRule(c, address, body) || Guard.blocked(c, address)
+    fun isSpam(c: Context, threadId: Long, address: String, body: String, checkGuard: Boolean = false): Boolean {
+        if (isSpamThread(c, threadId) || isBlockedSender(c, address) || matchesRule(c, address, body)) return true
+        val k = senderKey(address)
+        if (k.isEmpty()) return false
+        if (checkGuard) {
+            val blocked = Guard.blocked(c, address)
+            guardCache[k] = blocked
+            return blocked
+        }
+        return guardCache[k] == true
+    }
 
     fun block(c: Context, threadId: Long, address: String, syncGuard: Boolean = true) {
         val sp = spamThreads(c).toMutableSet().apply { add(threadId.toString()) }
         val bs = blockedSenders(c).toMutableSet()
         val k = senderKey(address)
-        if (k.isNotEmpty()) bs.add(k)
+        if (k.isNotEmpty()) {
+            bs.add(k)
+            guardCache[k] = true
+        }
+        spamThreadsCache = sp
+        blockedCache = bs
         Sahl.prefs(c).edit().putStringSet("spam_threads", sp).putStringSet("blocked_senders", bs).apply()
         if (syncGuard && address.isNotBlank()) {
-            try {
-                c.contentResolver.insert(
-                    Uri.parse("content://com.sahl.tools.union/guard/block"),
-                    ContentValues().apply { put("number", address) }
-                )
-            } catch (_: Exception) { }
+            val app = c.applicationContext
+            Thread {
+                try {
+                    app.contentResolver.insert(
+                        Uri.parse("content://com.sahl.tools.union/guard/block"),
+                        ContentValues().apply { put("number", address) }
+                    )
+                } catch (_: Exception) { }
+            }.start()
         }
     }
 
@@ -88,50 +135,74 @@ object Spam {
         val sp = spamThreads(c).toMutableSet().apply { remove(threadId.toString()) }
         val bs = blockedSenders(c).toMutableSet()
         val k = senderKey(address)
-        if (k.isNotEmpty()) bs.remove(k)
+        if (k.isNotEmpty()) {
+            bs.remove(k)
+            guardCache[k] = false
+        }
+        spamThreadsCache = sp
+        blockedCache = bs
         Sahl.prefs(c).edit().putStringSet("spam_threads", sp).putStringSet("blocked_senders", bs).apply()
         if (syncGuard && address.isNotBlank()) {
-            try {
-                c.contentResolver.insert(
-                    Uri.parse("content://com.sahl.tools.union/guard/allow"),
-                    ContentValues().apply { put("number", address) }
-                )
-            } catch (_: Exception) { }
+            val app = c.applicationContext
+            Thread {
+                try {
+                    app.contentResolver.insert(
+                        Uri.parse("content://com.sahl.tools.union/guard/allow"),
+                        ContentValues().apply { put("number", address) }
+                    )
+                } catch (_: Exception) { }
+            }.start()
         }
     }
 
     fun unblockSender(c: Context, key: String) {
         val bs = blockedSenders(c).toMutableSet().apply { remove(key) }
+        blockedCache = bs
+        guardCache[key] = false
         Sahl.prefs(c).edit().putStringSet("blocked_senders", bs).apply()
     }
 }
 
 /** Auto-saved unsent message drafts per thread or phone number. */
 object Drafts {
-    private fun obj(c: Context): JSONObject = try {
-        JSONObject(Sahl.prefs(c).getString("drafts", "{}"))
-    } catch (_: Exception) { JSONObject() }
+    @Volatile private var cache: MutableMap<String, String>? = null
+
+    private fun map(c: Context): MutableMap<String, String> {
+        cache?.let { return it }
+        val m = HashMap<String, String>()
+        try {
+            val o = JSONObject(Sahl.prefs(c).getString("drafts", "{}") ?: "{}")
+            val it = o.keys()
+            while (it.hasNext()) {
+                val k = it.next()
+                val v = o.optString(k, "")
+                if (v.isNotEmpty()) m[k] = v
+            }
+        } catch (_: Exception) { }
+        cache = m
+        return m
+    }
 
     private fun key(threadId: Long, address: String): String =
         if (threadId > 0L) "t:$threadId" else "a:${Norm.phoneKey(address)}"
 
     fun get(c: Context, threadId: Long, address: String): String {
-        val o = obj(c)
-        if (threadId > 0L) o.optString("t:$threadId", "").takeIf { it.isNotEmpty() }?.let { return it }
-        val ak = "a:${Norm.phoneKey(address)}"
-        return if (address.isNotBlank()) o.optString(ak, "") else ""
+        val m = map(c)
+        if (threadId > 0L) m["t:$threadId"]?.takeIf { it.isNotEmpty() }?.let { return it }
+        if (address.isNotBlank()) m["a:${Norm.phoneKey(address)}"]?.let { return it }
+        return ""
     }
 
     fun save(c: Context, threadId: Long, address: String, text: String) {
-        val o = obj(c)
+        val m = map(c)
         val trimmed = text.trim()
         if (trimmed.isEmpty()) {
-            o.remove("t:$threadId")
-            if (address.isNotBlank()) o.remove("a:${Norm.phoneKey(address)}")
+            m.remove("t:$threadId")
+            if (address.isNotBlank()) m.remove("a:${Norm.phoneKey(address)}")
         } else {
-            o.put(key(threadId, address), text)
+            m[key(threadId, address)] = text
         }
-        Sahl.prefs(c).edit().putString("drafts", o.toString()).apply()
+        Sahl.prefs(c).edit().putString("drafts", JSONObject(m as Map<*, *>).toString()).apply()
     }
 
     fun clear(c: Context, threadId: Long, address: String) = save(c, threadId, address, "")
@@ -172,12 +243,15 @@ object Snippets {
 
 /** Archive finished conversations without deleting them; auto-unarchives on new reply. */
 object Archive {
-    fun all(c: Context): Set<String> = Sahl.prefs(c).getStringSet("archived_threads", null)?.toSet() ?: emptySet()
+    @Volatile private var cache: Set<String>? = null
+
+    fun all(c: Context): Set<String> = cache ?: (Sahl.prefs(c).getStringSet("archived_threads", null)?.toSet() ?: emptySet()).also { cache = it }
     fun isArchived(c: Context, threadId: Long): Boolean = threadId.toString() in all(c)
 
     fun setArchived(c: Context, threads: Collection<Long>, on: Boolean) {
         val s = all(c).toMutableSet()
         for (id in threads) if (on) s.add(id.toString()) else s.remove(id.toString())
+        cache = s
         Sahl.prefs(c).edit().putStringSet("archived_threads", s).apply()
     }
 
@@ -189,13 +263,15 @@ object Archive {
 /** Biometric / screen-lock protected chats, optionally aligned with SahlContacts Vault. */
 object ChatVault {
     private var unlockedUntil = 0L
+    @Volatile private var cache: Set<String>? = null
 
-    fun lockedThreads(c: Context): Set<String> = Sahl.prefs(c).getStringSet("locked_threads", null)?.toSet() ?: emptySet()
+    fun lockedThreads(c: Context): Set<String> = cache ?: (Sahl.prefs(c).getStringSet("locked_threads", null)?.toSet() ?: emptySet()).also { cache = it }
     fun alignContactsVault(c: Context): Boolean = Sahl.prefs(c).getBoolean("align_contacts_vault", true)
 
     fun setLocked(c: Context, threads: Collection<Long>, on: Boolean) {
         val s = lockedThreads(c).toMutableSet()
         for (id in threads) if (on) s.add(id.toString()) else s.remove(id.toString())
+        cache = s
         Sahl.prefs(c).edit().putStringSet("locked_threads", s).apply()
     }
 
